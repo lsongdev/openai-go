@@ -8,8 +8,6 @@ import (
 	"net/http"
 )
 
-const apiURLv1 = "https://api.openai.com/v1"
-
 type OpenAIErrorResponse struct {
 	Message string `json:"message"`
 	Type    string `json:"type"`
@@ -33,7 +31,7 @@ func (openai OpenAIClient) MakeRequest(path string, data interface{}) (io.ReadCl
 	if err != nil {
 		return nil, fmt.Errorf("json error: %v", err)
 	}
-	req, err := http.NewRequest("POST", apiURLv1+path, bytes.NewBuffer(payload))
+	req, err := http.NewRequest("POST", openai.config.API+path, bytes.NewBuffer(payload))
 	if err != nil {
 		return nil, fmt.Errorf("invalid request: %v", err)
 	}
@@ -42,6 +40,9 @@ func (openai OpenAIClient) MakeRequest(path string, data interface{}) (io.ReadCl
 	res, err := openai.client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("cannot make request: %v", err)
+	}
+	if res.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("invalid status code: %s", res.Status)
 	}
 	return res.Body, nil
 }

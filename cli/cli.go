@@ -8,8 +8,8 @@ import (
 
 func Run() {
 	config := openai.Configuration{
-		API:    "https://api.lsong.one:8443/openai",
-		APIKey: "sk-",
+		API:    "https://oai.lsong.org/v1",
+		APIKey: "5e88a1c714c84cbba4e29e4a956d0f7b",
 	}
 	client, err := openai.NewClient(config)
 	if err != nil {
@@ -20,7 +20,7 @@ func Run() {
 		Content: "Hello!",
 	}
 	req := openai.ChatCompletionRequest{
-		Model:           openai.GPT3_5_Trubo_0301,
+		Model:           openai.GPT3_5_Trubo,
 		MaxTokens:       2048,
 		Temperature:     0,
 		NumberOfChoices: 1,
@@ -30,9 +30,7 @@ func Run() {
 	}
 	res, err := client.CreateChatCompletion(req)
 	if err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
-	log.Println(res.Choices[0].Message.Role)
-	log.Println(res.Choices[0].Message.Content)
-	log.Println(res.Usage.TotalTokens)
+	log.Printf("[%s](%d): %s\n", res.Choices[0].Message.Role, res.Usage.TotalTokens, res.Choices[0].Message.Content)
 }

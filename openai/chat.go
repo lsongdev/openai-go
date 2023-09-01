@@ -53,6 +53,9 @@ type ChatCompletionMessage struct {
 // https://platform.openai.com/docs/api-reference/chat/create
 func (openai *OpenAIClient) CreateChatCompletion(request ChatCompletionRequest) (resp ChatCompletionResponse, err error) {
 	data, err := openai.MakeRequest("/chat/completions", request)
+	if err != nil {
+		return
+	}
 	json.NewDecoder(data).Decode(&resp)
 	if resp.Error.Code != "" {
 		err = errors.New(resp.Error.Message)
