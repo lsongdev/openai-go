@@ -1,3 +1,3 @@
-module github.com/song940/openai-go
+module github.com/lsongdev/openai-go
 
 go 1.19

@@ -5,47 +5,13 @@
 
 ## Example
 
-### Completion API with GPT-3 Model
-
 ```go
 package main
 
 import (
     "log"
 
-	"github.com/song940/openai-go/openai"
-)
-
-func main() {
-	config := openai.Configuration{
-		APIKey: "your api key",
-	}
-	client, err := openai.NewClient(config)
-	if err != nil {
-		log.Fatal(err)
-	}
-	req := openai.CompletionRequest{
-		Model:     openai.GPT3TextDavinci003,
-		MaxTokens: 2048,
-		Prompt:    "Say this is a test",
-	}
-	resp, err := client.CreateCompletion(req)
-	if err != nil {
-		panic(err)
-	}
-	log.Println(resp.Choices[0].Text)
-}
-```
-
-### Chat API with ChatAGPT Model
-
-```go
-package main
-
-import (
-    "log"
-
-	"github.com/song940/openai-go/openai"
+	"github.com/lsongdev/openai-go/openai"
 )
 
 func main() {
