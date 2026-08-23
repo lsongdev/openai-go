@@ -1,4 +1,4 @@
-package router
+package proxy
 
 import (
 	"context"
@@ -11,12 +11,16 @@ import (
 
 	"github.com/lsongdev/miya-agents/anthropic"
 	"github.com/lsongdev/miya-agents/openai"
+	"github.com/lsongdev/miya-agents/proxy/providers"
 )
 
 func TestSmoke_Models(t *testing.T) {
-	r := NewRouter()
-	r.AddProvider(&Provider{Name: "p1", Type: ProviderTypeOpenAI, BaseURL: "http://localhost", Models: []string{"gpt-4", "gpt-3.5"}})
-	r.AddProvider(&Provider{Name: "p2", Type: ProviderTypeAnthropic, BaseURL: "http://localhost", Models: []string{"claude-3"}})
+	r := NewProxy()
+	r.AddProvider(&providers.Provider{
+		Name: "p1", Type: providers.ProviderTypeOpenAI, BaseURL: "http://localhost",
+		Models: []string{"gpt-4", "gpt-3.5", "gpt-4"}, ModelAliases: map[string]string{"fast": "gpt-4"},
+	})
+	r.AddProvider(&providers.Provider{Name: "p2", Type: providers.ProviderTypeAnthropic, BaseURL: "http://localhost", Models: []string{"claude-3", "gpt-4"}})
 
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, httptest.NewRequest("GET", "/v1/models", nil))
@@ -30,8 +34,15 @@ func TestSmoke_Models(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
 		t.Fatalf("json decode: %v", err)
 	}
-	if len(body.Data) != 3 {
-		t.Fatalf("expected 3 models, got %d", len(body.Data))
+	if len(body.Data) != 4 {
+		t.Fatalf("expected 4 unique public models, got %d: %#v", len(body.Data), body.Data)
+	}
+	owners := make(map[string]string, len(body.Data))
+	for _, model := range body.Data {
+		owners[model.ID] = model.OwnedBy
+	}
+	if owners["fast"] != "p1" || owners["gpt-4"] != "p1" {
+		t.Fatalf("model aliases or deterministic ownership missing: %#v", owners)
 	}
 }
 
@@ -51,8 +62,8 @@ func TestSmoke_ChatCompletions_OpenAI(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	r := NewRouter()
-	r.AddProvider(&Provider{Name: "oai", Type: ProviderTypeOpenAI, BaseURL: upstream.URL, Models: []string{"gpt-4"}})
+	r := NewProxy()
+	r.AddProvider(&providers.Provider{Name: "oai", Type: providers.ProviderTypeOpenAI, BaseURL: upstream.URL, Models: []string{"gpt-4"}})
 
 	body := `{"model":"gpt-4","messages":[{"role":"user","content":"hi"}]}`
 	w := httptest.NewRecorder()
@@ -92,8 +103,8 @@ func TestSmoke_ChatCompletions_OpenAI_Stream(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	r := NewRouter()
-	r.AddProvider(&Provider{Name: "oai", Type: ProviderTypeOpenAI, BaseURL: upstream.URL, Models: []string{"gpt-4"}})
+	r := NewProxy()
+	r.AddProvider(&providers.Provider{Name: "oai", Type: providers.ProviderTypeOpenAI, BaseURL: upstream.URL, Models: []string{"gpt-4"}})
 
 	body := `{"model":"gpt-4","messages":[{"role":"user","content":"hi"}],"stream":true}`
 	w := httptest.NewRecorder()
@@ -129,8 +140,8 @@ func TestSmoke_ChatCompletions_Anthropic(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	r := NewRouter()
-	r.AddProvider(&Provider{Name: "anth", Type: ProviderTypeAnthropic, BaseURL: upstream.URL, Models: []string{"claude-3"}, DefaultMaxTokens: 4096})
+	r := NewProxy()
+	r.AddProvider(&providers.Provider{Name: "anth", Type: providers.ProviderTypeAnthropic, BaseURL: upstream.URL, Models: []string{"claude-3"}, DefaultMaxTokens: 4096})
 
 	body := `{"model":"claude-3","messages":[{"role":"user","content":"hi"}]}`
 	w := httptest.NewRecorder()
@@ -186,8 +197,8 @@ func TestSmoke_ChatCompletions_Anthropic_Stream(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	r := NewRouter()
-	r.AddProvider(&Provider{Name: "anth", Type: ProviderTypeAnthropic, BaseURL: upstream.URL, Models: []string{"claude-3"}, DefaultMaxTokens: 4096})
+	r := NewProxy()
+	r.AddProvider(&providers.Provider{Name: "anth", Type: providers.ProviderTypeAnthropic, BaseURL: upstream.URL, Models: []string{"claude-3"}, DefaultMaxTokens: 4096})
 
 	body := `{"model":"claude-3","messages":[{"role":"user","content":"hi"}],"stream":true}`
 	w := httptest.NewRecorder()
@@ -220,8 +231,8 @@ func TestSmoke_Messages_Anthropic(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	r := NewRouter()
-	r.AddProvider(&Provider{Name: "anth", Type: ProviderTypeAnthropic, BaseURL: upstream.URL, Models: []string{"claude-3"}, DefaultMaxTokens: 4096})
+	r := NewProxy()
+	r.AddProvider(&providers.Provider{Name: "anth", Type: providers.ProviderTypeAnthropic, BaseURL: upstream.URL, Models: []string{"claude-3"}, DefaultMaxTokens: 4096})
 
 	body := `{"model":"claude-3","max_tokens":100,"messages":[{"role":"user","content":"hi"}]}`
 	w := httptest.NewRecorder()
@@ -255,8 +266,8 @@ func TestSmoke_Messages_OpenAI(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	r := NewRouter()
-	r.AddProvider(&Provider{Name: "oai", Type: ProviderTypeOpenAI, BaseURL: upstream.URL, Models: []string{"gpt-4"}})
+	r := NewProxy()
+	r.AddProvider(&providers.Provider{Name: "oai", Type: providers.ProviderTypeOpenAI, BaseURL: upstream.URL, Models: []string{"gpt-4"}})
 
 	body := `{"model":"gpt-4","max_tokens":100,"messages":[{"role":"user","content":"hi"}]}`
 	w := httptest.NewRecorder()
@@ -278,8 +289,8 @@ func TestSmoke_Messages_OpenAI(t *testing.T) {
 }
 
 func TestSmoke_Errors(t *testing.T) {
-	r := NewRouter()
-	r.AddProvider(&Provider{Name: "p", Type: ProviderTypeOpenAI, BaseURL: "http://localhost", Models: []string{"m"}})
+	r := NewProxy()
+	r.AddProvider(&providers.Provider{Name: "p", Type: providers.ProviderTypeOpenAI, BaseURL: "http://localhost", Models: []string{"m"}})
 
 	t.Run("not found", func(t *testing.T) {
 		w := httptest.NewRecorder()
@@ -298,9 +309,9 @@ func TestSmoke_Errors(t *testing.T) {
 	})
 
 	t.Run("rejected by hook", func(t *testing.T) {
-		r2 := NewRouter()
-		r2.AddProvider(&Provider{Name: "p", Type: ProviderTypeOpenAI, BaseURL: "http://localhost", Models: []string{"m"}})
-		r2.OnRequest(func(ctx *RequestContext) error {
+		r2 := NewProxy()
+		r2.AddProvider(&providers.Provider{Name: "p", Type: providers.ProviderTypeOpenAI, BaseURL: "http://localhost", Models: []string{"m"}})
+		r2.OnRequest(func(ctx *providers.RequestContext) error {
 			return fmt.Errorf("blocked")
 		})
 		body := `{"model":"m","messages":[{"role":"user","content":"hi"}]}`
@@ -327,8 +338,8 @@ func TestSmoke_OpenAIClient(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	r := NewRouter()
-	r.AddProvider(&Provider{Name: "oai", Type: ProviderTypeOpenAI, BaseURL: upstream.URL, Models: []string{"gpt-4"}})
+	r := NewProxy()
+	r.AddProvider(&providers.Provider{Name: "oai", Type: providers.ProviderTypeOpenAI, BaseURL: upstream.URL, Models: []string{"gpt-4"}})
 
 	// Start the router as an HTTP server
 	routerServer := httptest.NewServer(r)
@@ -375,8 +386,8 @@ func TestSmoke_OpenAIClient_Stream(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	r := NewRouter()
-	r.AddProvider(&Provider{Name: "oai", Type: ProviderTypeOpenAI, BaseURL: upstream.URL, Models: []string{"gpt-4"}})
+	r := NewProxy()
+	r.AddProvider(&providers.Provider{Name: "oai", Type: providers.ProviderTypeOpenAI, BaseURL: upstream.URL, Models: []string{"gpt-4"}})
 
 	routerServer := httptest.NewServer(r)
 	defer routerServer.Close()
@@ -424,8 +435,8 @@ func TestSmoke_AnthropicClient(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	r := NewRouter()
-	r.AddProvider(&Provider{Name: "anth", Type: ProviderTypeAnthropic, BaseURL: upstream.URL, Models: []string{"claude-3"}, DefaultMaxTokens: 4096})
+	r := NewProxy()
+	r.AddProvider(&providers.Provider{Name: "anth", Type: providers.ProviderTypeAnthropic, BaseURL: upstream.URL, Models: []string{"claude-3"}, DefaultMaxTokens: 4096})
 
 	routerServer := httptest.NewServer(r)
 	defer routerServer.Close()
@@ -482,8 +493,8 @@ func TestSmoke_AnthropicClient_Stream(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	r := NewRouter()
-	r.AddProvider(&Provider{Name: "anth", Type: ProviderTypeAnthropic, BaseURL: upstream.URL, Models: []string{"claude-3"}, DefaultMaxTokens: 4096})
+	r := NewProxy()
+	r.AddProvider(&providers.Provider{Name: "anth", Type: providers.ProviderTypeAnthropic, BaseURL: upstream.URL, Models: []string{"claude-3"}, DefaultMaxTokens: 4096})
 
 	routerServer := httptest.NewServer(r)
 	defer routerServer.Close()
@@ -549,8 +560,8 @@ func TestSmoke_Messages_Anthropic_Stream(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	r := NewRouter()
-	r.AddProvider(&Provider{Name: "anth", Type: ProviderTypeAnthropic, BaseURL: upstream.URL, Models: []string{"claude-3"}, DefaultMaxTokens: 4096})
+	r := NewProxy()
+	r.AddProvider(&providers.Provider{Name: "anth", Type: providers.ProviderTypeAnthropic, BaseURL: upstream.URL, Models: []string{"claude-3"}, DefaultMaxTokens: 4096})
 
 	body := `{"model":"claude-3","max_tokens":100,"messages":[{"role":"user","content":"hi"}],"stream":true}`
 	w := httptest.NewRecorder()
@@ -585,8 +596,8 @@ func TestSmoke_Messages_OpenAI_Stream(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	r := NewRouter()
-	r.AddProvider(&Provider{Name: "oai", Type: ProviderTypeOpenAI, BaseURL: upstream.URL, Models: []string{"gpt-4"}})
+	r := NewProxy()
+	r.AddProvider(&providers.Provider{Name: "oai", Type: providers.ProviderTypeOpenAI, BaseURL: upstream.URL, Models: []string{"gpt-4"}})
 
 	body := `{"model":"gpt-4","max_tokens":100,"messages":[{"role":"user","content":"hi"}],"stream":true}`
 	w := httptest.NewRecorder()
@@ -621,8 +632,8 @@ func TestSmoke_ArrayContent(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	r := NewRouter()
-	r.AddProvider(&Provider{Name: "oai", Type: ProviderTypeOpenAI, BaseURL: upstream.URL, Models: []string{"gpt-4"}})
+	r := NewProxy()
+	r.AddProvider(&providers.Provider{Name: "oai", Type: providers.ProviderTypeOpenAI, BaseURL: upstream.URL, Models: []string{"gpt-4"}})
 
 	// content as array of parts
 	body := `{"model":"gpt-4","messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}]}`
@@ -652,8 +663,8 @@ func TestSmoke_ArrayContent_Messages(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	r := NewRouter()
-	r.AddProvider(&Provider{Name: "anth", Type: ProviderTypeAnthropic, BaseURL: upstream.URL, Models: []string{"claude-3"}, DefaultMaxTokens: 4096})
+	r := NewProxy()
+	r.AddProvider(&providers.Provider{Name: "anth", Type: providers.ProviderTypeAnthropic, BaseURL: upstream.URL, Models: []string{"claude-3"}, DefaultMaxTokens: 4096})
 
 	// content as array of blocks (Anthropic format)
 	body := `{"model":"claude-3","max_tokens":100,"messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}]}`

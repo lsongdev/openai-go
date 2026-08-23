@@ -1,4 +1,4 @@
-package router
+package proxy
 
 import (
 	"encoding/json"
@@ -12,6 +12,7 @@ import (
 
 	"github.com/lsongdev/miya-agents/anthropic"
 	"github.com/lsongdev/miya-agents/openai"
+	"github.com/lsongdev/miya-agents/proxy/providers"
 )
 
 // mockResponse captures OnResponse callback data for assertions.
@@ -24,8 +25,8 @@ type mockResponse struct {
 	err       error
 }
 
-func (m *mockResponse) capture() func(*ResponseContext) {
-	return func(ctx *ResponseContext) {
+func (m *mockResponse) capture() func(*providers.ResponseContext) {
+	return func(ctx *providers.ResponseContext) {
 		m.mu.Lock()
 		defer m.mu.Unlock()
 		m.called = true
@@ -125,8 +126,8 @@ func TestMock_OpenAI_NonStream_OnResponse(t *testing.T) {
 	defer upstream.Close()
 
 	mr := &mockResponse{}
-	r := NewRouter()
-	r.AddProvider(&Provider{Name: "oai", Type: ProviderTypeOpenAI, BaseURL: upstream.URL, Models: []string{"gpt-4"}})
+	r := NewProxy()
+	r.AddProvider(&providers.Provider{Name: "oai", Type: providers.ProviderTypeOpenAI, BaseURL: upstream.URL, Models: []string{"gpt-4"}})
 	r.OnResponse(mr.capture())
 
 	body := `{"model":"gpt-4","messages":[{"role":"user","content":"hi"}]}`
@@ -161,8 +162,8 @@ func TestMock_OpenAI_Stream_OnResponse(t *testing.T) {
 	defer upstream.Close()
 
 	mr := &mockResponse{}
-	r := NewRouter()
-	r.AddProvider(&Provider{Name: "oai", Type: ProviderTypeOpenAI, BaseURL: upstream.URL, Models: []string{"gpt-4"}})
+	r := NewProxy()
+	r.AddProvider(&providers.Provider{Name: "oai", Type: providers.ProviderTypeOpenAI, BaseURL: upstream.URL, Models: []string{"gpt-4"}})
 	r.OnResponse(mr.capture())
 
 	body := `{"model":"gpt-4","messages":[{"role":"user","content":"hi"}],"stream":true}`
@@ -195,8 +196,8 @@ func TestMock_Anthropic_NonStream_OnResponse(t *testing.T) {
 	defer upstream.Close()
 
 	mr := &mockResponse{}
-	r := NewRouter()
-	r.AddProvider(&Provider{Name: "anth", Type: ProviderTypeAnthropic, BaseURL: upstream.URL, Models: []string{"claude-3"}, DefaultMaxTokens: 4096})
+	r := NewProxy()
+	r.AddProvider(&providers.Provider{Name: "anth", Type: providers.ProviderTypeAnthropic, BaseURL: upstream.URL, Models: []string{"claude-3"}, DefaultMaxTokens: 4096})
 	r.OnResponse(mr.capture())
 
 	body := `{"model":"claude-3","messages":[{"role":"user","content":"hi"}]}`
@@ -240,8 +241,8 @@ func TestMock_Anthropic_Stream_OnResponse(t *testing.T) {
 	defer upstream.Close()
 
 	mr := &mockResponse{}
-	r := NewRouter()
-	r.AddProvider(&Provider{Name: "anth", Type: ProviderTypeAnthropic, BaseURL: upstream.URL, Models: []string{"claude-3"}, DefaultMaxTokens: 4096})
+	r := NewProxy()
+	r.AddProvider(&providers.Provider{Name: "anth", Type: providers.ProviderTypeAnthropic, BaseURL: upstream.URL, Models: []string{"claude-3"}, DefaultMaxTokens: 4096})
 	r.OnResponse(mr.capture())
 
 	body := `{"model":"claude-3","messages":[{"role":"user","content":"hi"}],"stream":true}`
@@ -273,8 +274,8 @@ func TestMock_OpenAI_to_Anthropic_NonStream_OnResponse(t *testing.T) {
 	defer upstream.Close()
 
 	mr := &mockResponse{}
-	r := NewRouter()
-	r.AddProvider(&Provider{Name: "oai", Type: ProviderTypeOpenAI, BaseURL: upstream.URL, Models: []string{"gpt-4"}})
+	r := NewProxy()
+	r.AddProvider(&providers.Provider{Name: "oai", Type: providers.ProviderTypeOpenAI, BaseURL: upstream.URL, Models: []string{"gpt-4"}})
 	r.OnResponse(mr.capture())
 
 	body := `{"model":"gpt-4","max_tokens":100,"messages":[{"role":"user","content":"hi"}]}`
@@ -315,8 +316,8 @@ func TestMock_OpenAI_to_Anthropic_Stream_OnResponse(t *testing.T) {
 	defer upstream.Close()
 
 	mr := &mockResponse{}
-	r := NewRouter()
-	r.AddProvider(&Provider{Name: "oai", Type: ProviderTypeOpenAI, BaseURL: upstream.URL, Models: []string{"gpt-4"}})
+	r := NewProxy()
+	r.AddProvider(&providers.Provider{Name: "oai", Type: providers.ProviderTypeOpenAI, BaseURL: upstream.URL, Models: []string{"gpt-4"}})
 	r.OnResponse(mr.capture())
 
 	body := `{"model":"gpt-4","max_tokens":100,"messages":[{"role":"user","content":"hi"}],"stream":true}`
@@ -356,8 +357,8 @@ func TestMock_Anthropic_to_OpenAI_NonStream_OnResponse(t *testing.T) {
 	defer upstream.Close()
 
 	mr := &mockResponse{}
-	r := NewRouter()
-	r.AddProvider(&Provider{Name: "anth", Type: ProviderTypeAnthropic, BaseURL: upstream.URL, Models: []string{"claude-3"}, DefaultMaxTokens: 4096})
+	r := NewProxy()
+	r.AddProvider(&providers.Provider{Name: "anth", Type: providers.ProviderTypeAnthropic, BaseURL: upstream.URL, Models: []string{"claude-3"}, DefaultMaxTokens: 4096})
 	r.OnResponse(mr.capture())
 
 	body := `{"model":"claude-3","messages":[{"role":"user","content":"hi"}]}`
@@ -400,8 +401,8 @@ func TestMock_Anthropic_to_OpenAI_Stream_OnResponse(t *testing.T) {
 	defer upstream.Close()
 
 	mr := &mockResponse{}
-	r := NewRouter()
-	r.AddProvider(&Provider{Name: "anth", Type: ProviderTypeAnthropic, BaseURL: upstream.URL, Models: []string{"claude-3"}, DefaultMaxTokens: 4096})
+	r := NewProxy()
+	r.AddProvider(&providers.Provider{Name: "anth", Type: providers.ProviderTypeAnthropic, BaseURL: upstream.URL, Models: []string{"claude-3"}, DefaultMaxTokens: 4096})
 	r.OnResponse(mr.capture())
 
 	body := `{"model":"claude-3","messages":[{"role":"user","content":"hi"}],"stream":true}`
@@ -432,8 +433,8 @@ func TestMock_MultiMessageInput_OnResponse(t *testing.T) {
 	defer upstream.Close()
 
 	mr := &mockResponse{}
-	r := NewRouter()
-	r.AddProvider(&Provider{Name: "oai", Type: ProviderTypeOpenAI, BaseURL: upstream.URL, Models: []string{"gpt-4"}})
+	r := NewProxy()
+	r.AddProvider(&providers.Provider{Name: "oai", Type: providers.ProviderTypeOpenAI, BaseURL: upstream.URL, Models: []string{"gpt-4"}})
 	r.OnResponse(mr.capture())
 
 	body := `{
@@ -484,8 +485,8 @@ func TestMock_OnResponse_RequestID(t *testing.T) {
 	defer upstream.Close()
 
 	mr := &mockResponse{}
-	r := NewRouter()
-	r.AddProvider(&Provider{Name: "oai", Type: ProviderTypeOpenAI, BaseURL: upstream.URL, Models: []string{"gpt-4"}})
+	r := NewProxy()
+	r.AddProvider(&providers.Provider{Name: "oai", Type: providers.ProviderTypeOpenAI, BaseURL: upstream.URL, Models: []string{"gpt-4"}})
 	r.OnResponse(mr.capture())
 
 	body := `{"model":"gpt-4","messages":[{"role":"user","content":"hi"}]}`
@@ -517,8 +518,8 @@ func TestMock_OnResponse_Duration(t *testing.T) {
 	defer upstream.Close()
 
 	mr := &mockResponse{}
-	r := NewRouter()
-	r.AddProvider(&Provider{Name: "oai", Type: ProviderTypeOpenAI, BaseURL: upstream.URL, Models: []string{"gpt-4"}})
+	r := NewProxy()
+	r.AddProvider(&providers.Provider{Name: "oai", Type: providers.ProviderTypeOpenAI, BaseURL: upstream.URL, Models: []string{"gpt-4"}})
 	r.OnResponse(mr.capture())
 
 	body := `{"model":"gpt-4","messages":[{"role":"user","content":"hi"}]}`
@@ -552,10 +553,10 @@ func TestReal_OpenAI_ChatCompletion(t *testing.T) {
 	}
 
 	mr := &mockResponse{}
-	r := NewRouter()
-	r.AddProvider(&Provider{
+	r := NewProxy()
+	r.AddProvider(&providers.Provider{
 		Name:    "openai",
-		Type:    ProviderTypeOpenAI,
+		Type:    providers.ProviderTypeOpenAI,
 		BaseURL: "https://api.openai.com",
 		APIKey:  apiKey,
 		Models:  []string{"gpt-4o-mini"},
@@ -592,10 +593,10 @@ func TestReal_OpenAI_Stream(t *testing.T) {
 	}
 
 	mr := &mockResponse{}
-	r := NewRouter()
-	r.AddProvider(&Provider{
+	r := NewProxy()
+	r.AddProvider(&providers.Provider{
 		Name:    "openai",
-		Type:    ProviderTypeOpenAI,
+		Type:    providers.ProviderTypeOpenAI,
 		BaseURL: "https://api.openai.com",
 		APIKey:  apiKey,
 		Models:  []string{"gpt-4o-mini"},
@@ -629,10 +630,10 @@ func TestReal_Anthropic_ChatCompletion(t *testing.T) {
 	}
 
 	mr := &mockResponse{}
-	r := NewRouter()
-	r.AddProvider(&Provider{
+	r := NewProxy()
+	r.AddProvider(&providers.Provider{
 		Name:             "anthropic",
-		Type:             ProviderTypeAnthropic,
+		Type:             providers.ProviderTypeAnthropic,
 		BaseURL:          "https://api.anthropic.com",
 		APIKey:           apiKey,
 		Models:           []string{"claude-3-5-haiku-latest"},
@@ -670,10 +671,10 @@ func TestReal_Anthropic_Stream(t *testing.T) {
 	}
 
 	mr := &mockResponse{}
-	r := NewRouter()
-	r.AddProvider(&Provider{
+	r := NewProxy()
+	r.AddProvider(&providers.Provider{
 		Name:             "anthropic",
-		Type:             ProviderTypeAnthropic,
+		Type:             providers.ProviderTypeAnthropic,
 		BaseURL:          "https://api.anthropic.com",
 		APIKey:           apiKey,
 		Models:           []string{"claude-3-5-haiku-latest"},
@@ -708,10 +709,10 @@ func TestReal_OpenAI_to_Anthropic_Stream(t *testing.T) {
 	}
 
 	mr := &mockResponse{}
-	r := NewRouter()
-	r.AddProvider(&Provider{
+	r := NewProxy()
+	r.AddProvider(&providers.Provider{
 		Name:    "openai",
-		Type:    ProviderTypeOpenAI,
+		Type:    providers.ProviderTypeOpenAI,
 		BaseURL: "https://api.openai.com",
 		APIKey:  apiKey,
 		Models:  []string{"gpt-4o-mini"},
@@ -750,10 +751,10 @@ func TestReal_Anthropic_to_OpenAI_Stream(t *testing.T) {
 	}
 
 	mr := &mockResponse{}
-	r := NewRouter()
-	r.AddProvider(&Provider{
+	r := NewProxy()
+	r.AddProvider(&providers.Provider{
 		Name:             "anthropic",
-		Type:             ProviderTypeAnthropic,
+		Type:             providers.ProviderTypeAnthropic,
 		BaseURL:          "https://api.anthropic.com",
 		APIKey:           apiKey,
 		Models:           []string{"claude-3-5-haiku-latest"},

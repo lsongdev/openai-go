@@ -1,4 +1,4 @@
-package router
+package proxy
 
 import (
 	"encoding/json"
@@ -10,18 +10,19 @@ import (
 
 	"github.com/lsongdev/miya-agents/anthropic"
 	"github.com/lsongdev/miya-agents/openai"
+	"github.com/lsongdev/miya-agents/proxy/providers"
 )
 
 func TestOnRequestHookRejection(t *testing.T) {
-	r := NewRouter()
-	r.AddProvider(&Provider{
+	r := NewProxy()
+	r.AddProvider(&providers.Provider{
 		Name:    "test",
-		Type:    ProviderTypeOpenAI,
+		Type:    providers.ProviderTypeOpenAI,
 		BaseURL: "http://localhost",
 		Models:  []string{"test-model"},
 	})
 
-	r.OnRequest(func(ctx *RequestContext) error {
+	r.OnRequest(func(ctx *providers.RequestContext) error {
 		return fmt.Errorf("insufficient balance")
 	})
 
@@ -55,15 +56,15 @@ func TestOnRequestHookAllow(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	r := NewRouter()
-	r.AddProvider(&Provider{
+	r := NewProxy()
+	r.AddProvider(&providers.Provider{
 		Name:    "test",
-		Type:    ProviderTypeOpenAI,
+		Type:    providers.ProviderTypeOpenAI,
 		BaseURL: upstream.URL,
 		Models:  []string{"test-model"},
 	})
 	var requestCalled bool
-	r.OnRequest(func(ctx *RequestContext) error {
+	r.OnRequest(func(ctx *providers.RequestContext) error {
 		requestCalled = true
 		ctx.Upstream = r.FindProviderForModel(ctx.Input.Model)
 		return nil

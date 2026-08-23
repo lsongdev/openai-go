@@ -21,6 +21,9 @@ type Configuration struct {
 type Client struct {
 	config *Configuration
 	client *http.Client
+	// headers optionally supplies per-request headers (e.g. OAuth bearer
+	// authentication); when set it replaces the default x-api-key.
+	headers func() (map[string]string, error)
 }
 
 type Model struct {
@@ -42,6 +45,27 @@ func (c *Client) SetHTTPClient(client *http.Client) {
 	c.client = client
 }
 
+// SetHeaders sets a per-request header provider. When set it replaces the
+// default x-api-key authentication.
+func (c *Client) SetHeaders(fn func() (map[string]string, error)) {
+	c.headers = fn
+}
+
+func (c *Client) applyHeaders(req *http.Request) error {
+	if c.headers != nil {
+		headers, err := c.headers()
+		if err != nil {
+			return err
+		}
+		for k, v := range headers {
+			req.Header.Set(k, v)
+		}
+		return nil
+	}
+	req.Header.Set("x-api-key", c.config.APIKey)
+	return nil
+}
+
 func (c *Client) makeRequest(ctx context.Context, method, path string, body interface{}) (*http.Response, error) {
 	var bodyReader io.Reader
 	if body != nil {
@@ -60,7 +84,9 @@ func (c *Client) makeRequest(ctx context.Context, method, path string, body inte
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	req.Header.Set("x-api-key", c.config.APIKey)
+	if err := c.applyHeaders(req); err != nil {
+		return nil, fmt.Errorf("auth error: %w", err)
+	}
 	req.Header.Set("anthropic-version", "2023-06-01")
 
 	resp, err := c.client.Do(req)
@@ -133,7 +159,9 @@ func (c *Client) CreateMessageStream(ctx context.Context, req *Request) (*Messag
 		return nil, fmt.Errorf("create request error: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("x-api-key", c.config.APIKey)
+	if err := c.applyHeaders(httpReq); err != nil {
+		return nil, fmt.Errorf("auth error: %w", err)
+	}
 	httpReq.Header.Set("anthropic-version", "2023-06-01")
 
 	stream, err := sse.Do(ctx, c.client, httpReq)

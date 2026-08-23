@@ -10,8 +10,10 @@ import (
 )
 
 type Event struct {
-	Type string
-	Data string
+	Type  string
+	Data  string
+	ID    string
+	Retry string
 }
 
 type Stream struct {
@@ -39,8 +41,8 @@ func Do(ctx context.Context, client *http.Client, req *http.Request) (*Stream, e
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		resp.Body.Close()
 		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
 		return nil, fmt.Errorf("sse unexpected status %s: %s", resp.Status, string(body))
 	}
 
@@ -50,42 +52,75 @@ func Do(ctx context.Context, client *http.Client, req *http.Request) (*Stream, e
 		defer resp.Body.Close()
 		defer stream.Close()
 
-		reader := bufio.NewReader(resp.Body)
-		var currentEvent Event
-
-		for {
+		err := Read(ctx, resp.Body, func(event Event) error {
 			select {
+			case stream.Events <- event:
+				return nil
 			case <-ctx.Done():
-				return
-			default:
+				return ctx.Err()
 			}
-
-			line, err := reader.ReadString('\n')
-			if err != nil {
-				if err != io.EOF {
-					stream.err <- err
-				}
-				return
-			}
-
-			line = strings.TrimSpace(line)
-			if line == "" {
-				if currentEvent.Type != "" || currentEvent.Data != "" {
-					stream.Events <- currentEvent
-					currentEvent = Event{}
-				}
-				continue
-			}
-
-			if strings.HasPrefix(line, "event:") {
-				currentEvent.Type = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
-			} else if strings.HasPrefix(line, "data:") {
-				currentEvent.Data = strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-			} else if strings.HasPrefix(line, ":") {
-				continue
-			}
+		})
+		if err != nil && ctx.Err() == nil {
+			stream.err <- err
 		}
 	}()
 
 	return stream, nil
+}
+
+// Read decodes an SSE stream and calls emit for each complete event.
+func Read(ctx context.Context, source io.Reader, emit func(Event) error) error {
+	reader := bufio.NewReader(source)
+	var event Event
+	var data []string
+	dispatch := func() error {
+		if len(data) == 0 {
+			event = Event{}
+			return nil
+		}
+		event.Data = strings.Join(data, "\n")
+		if err := emit(event); err != nil {
+			return err
+		}
+		event = Event{}
+		data = nil
+		return nil
+	}
+
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		line, err := reader.ReadString('\n')
+		if len(line) > 0 {
+			line = strings.TrimSuffix(line, "\n")
+			line = strings.TrimSuffix(line, "\r")
+			if line == "" {
+				if dispatchErr := dispatch(); dispatchErr != nil {
+					return dispatchErr
+				}
+			} else if !strings.HasPrefix(line, ":") {
+				field, value, _ := strings.Cut(line, ":")
+				value = strings.TrimPrefix(value, " ")
+				switch field {
+				case "event":
+					event.Type = value
+				case "data":
+					data = append(data, value)
+				case "id":
+					if !strings.ContainsRune(value, '\x00') {
+						event.ID = value
+					}
+				case "retry":
+					event.Retry = value
+				}
+			}
+		}
+		if err != nil {
+			if err == io.EOF {
+				return dispatch()
+			}
+			return err
+		}
+	}
 }

@@ -31,7 +31,6 @@ func NewResponseWriter(w http.ResponseWriter) *ResponseWriter {
 func (s *ResponseWriter) Send(event Event) {
 	data, _ := json.Marshal(event)
 	fmt.Fprintf(s.w, "event: %s\ndata: %s\n\n", event.Type, data)
-	println("Sent event:", string(data))
 	if s.flusher != nil {
 		s.flusher.Flush()
 	}

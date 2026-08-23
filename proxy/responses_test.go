@@ -1,4 +1,4 @@
-package router
+package proxy
 
 import (
 	"encoding/json"
@@ -10,6 +10,7 @@ import (
 
 	"github.com/lsongdev/miya-agents/anthropic"
 	"github.com/lsongdev/miya-agents/openai"
+	"github.com/lsongdev/miya-agents/proxy/providers"
 )
 
 func TestResponses_OpenAI_NonStream(t *testing.T) {
@@ -35,8 +36,8 @@ func TestResponses_OpenAI_NonStream(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	r := NewRouter()
-	r.AddProvider(&Provider{Name: "oai", Type: ProviderTypeOpenAI, BaseURL: upstream.URL, Models: []string{"gpt-4o"}})
+	r := NewProxy()
+	r.AddProvider(&providers.Provider{Name: "oai", Type: providers.ProviderTypeOpenAI, BaseURL: upstream.URL, Models: []string{"gpt-4o"}})
 
 	body := `{"model":"gpt-4o","instructions":"Be helpful.","input":"Hello there"}`
 	w := httptest.NewRecorder()
@@ -90,8 +91,8 @@ func TestResponses_OpenAI_NonStream_InputArray(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	r := NewRouter()
-	r.AddProvider(&Provider{Name: "oai", Type: ProviderTypeOpenAI, BaseURL: upstream.URL, Models: []string{"gpt-4o"}})
+	r := NewProxy()
+	r.AddProvider(&providers.Provider{Name: "oai", Type: providers.ProviderTypeOpenAI, BaseURL: upstream.URL, Models: []string{"gpt-4o"}})
 
 	body := `{
 		"model": "gpt-4o",
@@ -127,8 +128,8 @@ func TestResponses_OpenAI_Stream(t *testing.T) {
 	defer upstream.Close()
 
 	mr := &mockResponse{}
-	r := NewRouter()
-	r.AddProvider(&Provider{Name: "oai", Type: ProviderTypeOpenAI, BaseURL: upstream.URL, Models: []string{"gpt-4o"}})
+	r := NewProxy()
+	r.AddProvider(&providers.Provider{Name: "oai", Type: providers.ProviderTypeOpenAI, BaseURL: upstream.URL, Models: []string{"gpt-4o"}})
 	r.OnResponse(mr.capture())
 
 	body := `{"model":"gpt-4o","input":"hi","stream":true}`
@@ -198,8 +199,8 @@ func TestResponses_OpenAI_Stream_ToolCalls(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	r := NewRouter()
-	r.AddProvider(&Provider{Name: "oai", Type: ProviderTypeOpenAI, BaseURL: upstream.URL, Models: []string{"gpt-4o"}})
+	r := NewProxy()
+	r.AddProvider(&providers.Provider{Name: "oai", Type: providers.ProviderTypeOpenAI, BaseURL: upstream.URL, Models: []string{"gpt-4o"}})
 
 	body := `{
 		"model": "gpt-4o",
@@ -261,8 +262,8 @@ func TestResponses_OpenAI_FunctionCallInput(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	r := NewRouter()
-	r.AddProvider(&Provider{Name: "oai", Type: ProviderTypeOpenAI, BaseURL: upstream.URL, Models: []string{"gpt-4o"}})
+	r := NewProxy()
+	r.AddProvider(&providers.Provider{Name: "oai", Type: providers.ProviderTypeOpenAI, BaseURL: upstream.URL, Models: []string{"gpt-4o"}})
 
 	body := `{
 		"model": "gpt-4o",
@@ -292,8 +293,8 @@ func TestResponses_Anthropic_NonStream(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	r := NewRouter()
-	r.AddProvider(&Provider{Name: "anth", Type: ProviderTypeAnthropic, BaseURL: upstream.URL, Models: []string{"claude-3"}, DefaultMaxTokens: 4096})
+	r := NewProxy()
+	r.AddProvider(&providers.Provider{Name: "anth", Type: providers.ProviderTypeAnthropic, BaseURL: upstream.URL, Models: []string{"claude-3"}, DefaultMaxTokens: 4096})
 
 	body := `{"model":"claude-3","instructions":"Be brief.","input":"hi"}`
 	w := httptest.NewRecorder()
@@ -339,8 +340,8 @@ func TestResponses_Anthropic_Stream(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	r := NewRouter()
-	r.AddProvider(&Provider{Name: "anth", Type: ProviderTypeAnthropic, BaseURL: upstream.URL, Models: []string{"claude-3"}, DefaultMaxTokens: 4096})
+	r := NewProxy()
+	r.AddProvider(&providers.Provider{Name: "anth", Type: providers.ProviderTypeAnthropic, BaseURL: upstream.URL, Models: []string{"claude-3"}, DefaultMaxTokens: 4096})
 
 	body := `{"model":"claude-3","input":"hi","stream":true}`
 	w := httptest.NewRecorder()
@@ -364,8 +365,8 @@ func TestResponses_Anthropic_Stream(t *testing.T) {
 }
 
 func TestResponses_NoProvider(t *testing.T) {
-	r := NewRouter()
-	r.AddProvider(&Provider{Name: "oai", Type: ProviderTypeOpenAI, BaseURL: "http://localhost", Models: []string{"gpt-4o"}})
+	r := NewProxy()
+	r.AddProvider(&providers.Provider{Name: "oai", Type: providers.ProviderTypeOpenAI, BaseURL: "http://localhost", Models: []string{"gpt-4o"}})
 
 	body := `{"model":"unknown","input":"hi"}`
 	w := httptest.NewRecorder()
@@ -377,7 +378,7 @@ func TestResponses_NoProvider(t *testing.T) {
 }
 
 func TestResponses_MethodNotAllowed(t *testing.T) {
-	r := NewRouter()
+	r := NewProxy()
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, httptest.NewRequest("GET", "/v1/responses", nil))
 	if w.Code != http.StatusMethodNotAllowed {

@@ -16,7 +16,9 @@ import (
 	"github.com/lsongdev/miya-agents/logging"
 	"github.com/lsongdev/miya-agents/mcp"
 	"github.com/lsongdev/miya-agents/openai"
-	"github.com/lsongdev/miya-agents/router"
+	"github.com/lsongdev/miya-agents/proxy"
+	"github.com/lsongdev/miya-agents/proxy/providers/anthropic/claude"
+	"github.com/lsongdev/miya-agents/proxy/providers/codex"
 	"github.com/lsongdev/miya-agents/session"
 )
 
@@ -343,6 +345,31 @@ func sessionsListCommand() {
 	fmt.Println("Resume with: miya -r <id>")
 }
 
+// addLocalProviders registers providers backed by locally stored OAuth
+// credentials (Codex CLI and Claude Code logins) when they exist.
+func addLocalProviders(r *proxy.Proxy) int {
+	added := 0
+	if r.FindProvider("codex") == nil && codex.LoggedIn() {
+		if store, err := codex.LoadStore(); err == nil {
+			r.AddProvider(codex.Provider(store))
+			added++
+			log.Printf("[PROXY] registered codex provider (%s)", store.Path())
+		} else {
+			log.Printf("[PROXY] load codex credentials: %v", err)
+		}
+	}
+	if r.FindProvider("claude") == nil && claude.LoggedIn() {
+		if store, err := claude.LoadStore(); err == nil {
+			r.AddProvider(claude.Provider(store))
+			added++
+			log.Printf("[PROXY] registered claude provider (%s)", store.Path())
+		} else {
+			log.Printf("[PROXY] load claude credentials: %v", err)
+		}
+	}
+	return added
+}
+
 func serveCommand() {
 	flagSet := flag.NewFlagSet("serve", flag.ExitOnError)
 	addr := flagSet.String("addr", ":8090", "Listen address (host:port)")
@@ -353,34 +380,54 @@ func serveCommand() {
 		fmt.Printf("Error loading config: %v\n", err)
 		os.Exit(1)
 	}
-	if len(cfg.Providers) == 0 {
-		fmt.Println("No providers configured. Run 'miya provider add ...' first.")
-		os.Exit(1)
-	}
-
-	r := router.NewRouter()
-	var defaultProvider *router.Provider
+	r := proxy.NewProxy()
+	providerCount := 0
 	for name, p := range cfg.Providers {
-		provider := &router.Provider{
+		var models []string
+		for _, profile := range cfg.Profiles {
+			if profile.Provider == name && strings.TrimSpace(profile.ModelName) != "" {
+				models = append(models, profile.ModelName)
+			}
+		}
+		for publicModel := range p.Models {
+			models = append(models, publicModel)
+		}
+		provider := &proxy.Provider{
 			Name:             name,
-			Type:             router.ProviderType(p.Type),
+			Type:             proxy.ProviderType(p.Type),
+			Protocol:         proxy.Protocol(p.Protocol),
 			BaseURL:          p.APIBase,
 			APIKey:           p.APIKey,
 			DefaultMaxTokens: 4096,
+			Models:           models,
+			ModelAliases:     p.Models,
 		}
 		r.AddProvider(provider)
-		if defaultProvider == nil {
-			defaultProvider = provider
-		}
+		providerCount++
 	}
-	r.OnRequest(func(ctx *router.RequestContext) error {
+	providerCount += addLocalProviders(r)
+	if providerCount == 0 {
+		fmt.Println("No providers configured and no local Codex or Claude login found.")
+		os.Exit(1)
+	}
+	r.OnRequest(func(ctx *proxy.RequestContext) error {
 		log.Printf("[REQUEST] %s model=%s stream=%v", ctx.RequestID, ctx.Input.Model, ctx.Input.Stream)
-		ctx.Upstream = r.FindProviderForModel(ctx.Input.Model)
+		if providerName := strings.TrimSpace(ctx.Request.Header.Get("X-Miya-Provider")); providerName != "" {
+			ctx.Upstream = r.FindProvider(providerName)
+			if ctx.Upstream == nil {
+				return &proxy.RequestError{Status: http.StatusBadRequest, Message: "unknown provider " + providerName}
+			}
+		} else {
+			ctx.Upstream = r.FindProviderForModel(ctx.Input.Model)
+		}
 		return nil
 	})
-	r.OnResponse(func(ctx *router.ResponseContext) {
-		log.Printf("[RESPONSE] %s usage=%v error=%v", ctx.RequestID, ctx.Output.Usage, ctx.Error)
-		log.Println(ctx.Output.Choices[0].Message)
+	r.OnResponse(func(ctx *proxy.ResponseContext) {
+		var usage any
+		if ctx.Output != nil {
+			usage = ctx.Output.Usage
+		}
+		log.Printf("[RESPONSE] %s usage=%v error=%v", ctx.RequestID, usage, ctx.Error)
 	})
 	log.Printf("miya serve listening on %s", *addr)
 	if err := http.ListenAndServe(*addr, r); err != nil {
@@ -395,7 +442,7 @@ func printUsage() {
 	fmt.Println("  miya [options]            Start REPL (default command)")
 	fmt.Println("  miya run [options]        Start REPL")
 	fmt.Println("  miya sessions [list]      List previous sessions")
-	fmt.Println("  miya serve [--addr ...]   Start the LLM router HTTP server")
+	fmt.Println("  miya serve [--addr ...]   Start the LLM proxy HTTP server")
 	fmt.Println("  miya help")
 	fmt.Println()
 	fmt.Println("REPL Options:")

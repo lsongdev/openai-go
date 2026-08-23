@@ -5,24 +5,24 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/lsongdev/miya-agents/router"
+	"github.com/lsongdev/miya-agents/proxy"
 )
 
 func main() {
-	r := router.NewRouter()
+	r := proxy.NewProxy()
 
-	openaiProvider := &router.Provider{
+	openaiProvider := &proxy.Provider{
 		Name:    "openai",
-		Type:    router.ProviderTypeOpenAI,
+		Type:    proxy.ProviderTypeOpenAI,
 		BaseURL: "https://api.openai.com",
 		APIKey:  os.Getenv("OPENAI_API_KEY"),
 		Models:  []string{"gpt-4-turbo", "gpt-4o", "deepseek-chat"},
 	}
 	r.AddProvider(openaiProvider)
 
-	anthropicProvider := &router.Provider{
+	anthropicProvider := &proxy.Provider{
 		Name:             "anthropic",
-		Type:             router.ProviderTypeAnthropic,
+		Type:             proxy.ProviderTypeAnthropic,
 		BaseURL:          "https://api.anthropic.com",
 		APIKey:           os.Getenv("ANTHROPIC_API_KEY"),
 		DefaultMaxTokens: 4096,
@@ -30,7 +30,7 @@ func main() {
 	}
 	r.AddProvider(anthropicProvider)
 
-	r.OnRequest(func(ctx *router.RequestContext) error {
+	r.OnRequest(func(ctx *proxy.RequestContext) error {
 		log.Printf("[REQUEST] %s model=%s stream=%v", ctx.RequestID, ctx.Input.Model, ctx.Input.Stream)
 		return nil
 	})
@@ -39,6 +39,6 @@ func main() {
 	if v := os.Getenv("ADDR"); v != "" {
 		addr = v
 	}
-	log.Printf("Router listening on %s", addr)
+	log.Printf("Proxy listening on %s", addr)
 	log.Fatal(http.ListenAndServe(addr, r))
 }
