@@ -16,7 +16,7 @@ import (
 // Type aliases re-exported for convenience of callers of this package.
 type (
 	Provider        = providers.Provider
-	ProviderType    = providers.ProviderType
+	Source          = providers.Source
 	Protocol        = providers.Protocol
 	RequestContext  = providers.RequestContext
 	ResponseContext = providers.ResponseContext
@@ -24,9 +24,10 @@ type (
 )
 
 const (
-	ProviderTypeOpenAI      = providers.ProviderTypeOpenAI
-	ProviderTypeAnthropic   = providers.ProviderTypeAnthropic
-	ProviderTypeCodex       = providers.ProviderTypeCodex
+	SourceOpenAI            = providers.SourceOpenAI
+	SourceAnthropic         = providers.SourceAnthropic
+	SourceCodex             = providers.SourceCodex
+	SourceClaudeCode        = providers.SourceClaudeCode
 	ProtocolOpenAIChat      = providers.ProtocolOpenAIChat
 	ProtocolOpenAIResponses = providers.ProtocolOpenAIResponses
 	ProtocolAnthropic       = providers.ProtocolAnthropic

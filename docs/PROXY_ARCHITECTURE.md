@@ -28,6 +28,24 @@ billing, D1, or lifecycle code:
 This gives the Go service the same protocol boundaries as the reference project
 without importing infrastructure that belongs to an edge billing gateway.
 
+The package layout makes source and protocol ownership explicit:
+
+```text
+proxy/
+|-- providers/
+|   |-- provider.go       shared provider contract and HTTP dispatch
+|   |-- openai/           OpenAI-compatible API-key source adapter
+|   |-- anthropic/        Anthropic API-key source adapter
+|   |-- codex/            ChatGPT Codex OAuth source adapter
+|   `-- claudecode/       Claude Code OAuth source adapter
+|-- protocols/            /chat/completions, /responses, /messages entrypoints
+`-- codec/                request, response, and SSE protocol transforms
+```
+
+The repository-level `openai/` and `anthropic/` packages remain the reusable
+API clients and wire types. Source adapters are intentionally thin and do not
+duplicate those clients or protocol models.
+
 ## Request Flow
 
 The public endpoints identify the client protocol:
@@ -57,24 +75,25 @@ stream state machine.
 
 ## Provider Model
 
-Provider `Type` selects authentication and provider behavior. `Protocol`
+Provider `Source` selects authentication and provider behavior. `Protocol`
 selects the native wire format. They are deliberately separate: `codex` is an
 OAuth/provider adapter whose native wire format is OpenAI Responses.
 
 When `protocol` is omitted it is inferred as follows:
 
-| Provider type | Native protocol |
+| Provider source | Native protocol |
 | --- | --- |
 | `openai` or empty | `openai.chat.v1` |
 | `anthropic` | `anthropic.messages.v1` |
 | `codex` | `openai.responses.v1` |
+| `claudecode` | `anthropic.messages.v1` |
 
-Configured provider credentials, local Codex credentials in
-`~/.codex/auth.json`, and local Claude credentials in
-`~/.claude/.credentials.json` can coexist. OAuth credentials are resolved per
-request so token refresh does not require restarting the proxy. An explicitly
-configured provider named `codex` or `claude` takes precedence over automatic
-registration of the corresponding local login.
+Configured API-key providers, local Codex credentials in `~/.codex/auth.json`,
+and local Claude Code credentials in `~/.claude/.credentials.json` can coexist.
+OAuth credentials are resolved per request so token refresh does not require
+restarting the proxy. The `codex` and `claudecode` sources are registered from
+their local login stores; JSON-configured providers currently accept `openai`
+and `anthropic` sources.
 
 The `models` configuration maps a public model name to an upstream model ID:
 
@@ -217,7 +236,7 @@ Provider selection can be supplied to Claude Code in the same settings object:
 {
   "env": {
     "ANTHROPIC_BASE_URL": "http://127.0.0.1:8090",
-    "ANTHROPIC_CUSTOM_HEADERS": "X-Miya-Provider: claude"
+    "ANTHROPIC_CUSTOM_HEADERS": "X-Miya-Provider: claudecode"
   }
 }
 ```

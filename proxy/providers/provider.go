@@ -11,18 +11,18 @@ import (
 	"strings"
 	"time"
 
-	"github.com/lsongdev/miya-agents/anthropic"
 	"github.com/lsongdev/miya-agents/openai"
 )
 
-type ProviderType string
+type Source string
 
 type Protocol string
 
 const (
-	ProviderTypeOpenAI    ProviderType = "openai"
-	ProviderTypeAnthropic ProviderType = "anthropic"
-	ProviderTypeCodex     ProviderType = "codex"
+	SourceOpenAI     Source = "openai"
+	SourceAnthropic  Source = "anthropic"
+	SourceCodex      Source = "codex"
+	SourceClaudeCode Source = "claudecode"
 
 	ProtocolOpenAIChat      Protocol = "openai.chat.v1"
 	ProtocolOpenAIResponses Protocol = "openai.responses.v1"
@@ -39,7 +39,7 @@ type BearerSource interface {
 
 type Provider struct {
 	Name             string
-	Type             ProviderType
+	Source           Source
 	Protocol         Protocol
 	BaseURL          string
 	APIKey           string
@@ -48,11 +48,12 @@ type Provider struct {
 	Models           []string
 	ModelAliases     map[string]string
 	ModelCatalog     []map[string]any
+	Authenticate     func(*http.Request) error
 	PrepareRequest   func(protocol Protocol, body []byte) ([]byte, error)
 	AlwaysStream     bool
 
-	// Auth supplies OAuth credentials (e.g. Codex or Claude login). When
-	// non-nil it overrides APIKey for upstream authentication.
+	// Auth exposes rotating OAuth credentials to source adapters. Adapters that
+	// need provider-specific headers should install Authenticate as well.
 	Auth BearerSource
 }
 
@@ -60,10 +61,10 @@ func (p *Provider) NativeProtocol() Protocol {
 	if p.Protocol != "" {
 		return p.Protocol
 	}
-	switch p.Type {
-	case ProviderTypeAnthropic:
+	switch p.Source {
+	case SourceAnthropic, SourceClaudeCode:
 		return ProtocolAnthropic
-	case ProviderTypeCodex:
+	case SourceCodex:
 		return ProtocolOpenAIResponses
 	default:
 		return ProtocolOpenAIChat
@@ -114,8 +115,21 @@ func (p *Provider) newRequest(ctx context.Context, protocol Protocol, body []byt
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
-	if err := p.applyNativeAuth(req); err != nil {
-		return nil, fmt.Errorf("provider %q: authenticate request: %w", p.Name, err)
+	if p.Authenticate != nil {
+		if err := p.Authenticate(req); err != nil {
+			return nil, fmt.Errorf("provider %q: authenticate request: %w", p.Name, err)
+		}
+	} else if p.Auth != nil {
+		token, headers, err := p.Auth.BearerToken()
+		if err != nil {
+			return nil, fmt.Errorf("provider %q: authenticate request: %w", p.Name, err)
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+		for key, value := range headers {
+			req.Header.Set(key, value)
+		}
+	} else if p.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+p.APIKey)
 	}
 	for key, value := range p.Headers {
 		req.Header.Set(key, value)
@@ -164,33 +178,6 @@ func (p *Provider) nativeEndpoint(protocol Protocol) (string, error) {
 	return base.String(), nil
 }
 
-func (p *Provider) applyNativeAuth(req *http.Request) error {
-	if p.Auth != nil {
-		token, headers, err := p.Auth.BearerToken()
-		if err != nil {
-			return err
-		}
-		req.Header.Set("Authorization", "Bearer "+token)
-		for key, value := range headers {
-			req.Header.Set(key, value)
-		}
-	} else if p.Type == ProviderTypeAnthropic {
-		req.Header.Set("x-api-key", p.APIKey)
-	} else {
-		req.Header.Set("Authorization", "Bearer "+p.APIKey)
-	}
-	if p.Type == ProviderTypeAnthropic {
-		req.Header.Set("anthropic-version", "2023-06-01")
-		if p.Auth != nil {
-			req.Header.Set("anthropic-beta", "oauth-2025-04-20")
-		}
-	}
-	if p.Type == ProviderTypeCodex {
-		req.Header.Set("OpenAI-Beta", "responses=experimental")
-	}
-	return nil
-}
-
 type RequestError struct {
 	Status  int
 	Message string
@@ -230,42 +217,4 @@ type ResponseContext struct {
 	Error       error
 	Duration    time.Duration
 	Diagnostics []string
-}
-
-// NewOpenAIClient builds an OpenAI-compatible client for the provider.
-func NewOpenAIClient(p *Provider, httpClient *http.Client) *openai.Client {
-	client, _ := openai.NewClient(&openai.Configuration{
-		API:    p.BaseURL,
-		APIKey: p.APIKey,
-	})
-	client.SetHTTPClient(httpClient)
-	return client
-}
-
-// NewAnthropicClient builds an Anthropic client for the provider. When the
-// provider carries OAuth credentials (Auth), requests are authenticated with
-// a bearer token and the OAuth beta header instead of x-api-key.
-func NewAnthropicClient(p *Provider, httpClient *http.Client) *anthropic.Client {
-	client := anthropic.NewClient(&anthropic.Configuration{
-		API:    p.BaseURL,
-		APIKey: p.APIKey,
-	})
-	client.SetHTTPClient(httpClient)
-	if p.Auth != nil {
-		client.SetHeaders(func() (map[string]string, error) {
-			token, headers, err := p.Auth.BearerToken()
-			if err != nil {
-				return nil, err
-			}
-			hs := map[string]string{
-				"Authorization":  "Bearer " + token,
-				"anthropic-beta": "oauth-2025-04-20",
-			}
-			for k, v := range headers {
-				hs[k] = v
-			}
-			return hs, nil
-		})
-	}
-	return client
 }

@@ -17,7 +17,7 @@ func TestOnRequestHookRejection(t *testing.T) {
 	r := NewProxy()
 	r.AddProvider(&providers.Provider{
 		Name:    "test",
-		Type:    providers.ProviderTypeOpenAI,
+		Source:  providers.SourceOpenAI,
 		BaseURL: "http://localhost",
 		Models:  []string{"test-model"},
 	})
@@ -59,7 +59,7 @@ func TestOnRequestHookAllow(t *testing.T) {
 	r := NewProxy()
 	r.AddProvider(&providers.Provider{
 		Name:    "test",
-		Type:    providers.ProviderTypeOpenAI,
+		Source:  providers.SourceOpenAI,
 		BaseURL: upstream.URL,
 		Models:  []string{"test-model"},
 	})

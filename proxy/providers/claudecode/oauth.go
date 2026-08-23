@@ -2,7 +2,7 @@
 // proxy can serve Anthropic models with subscription credentials instead of
 // API keys. Credentials are stored in ~/.claude/.credentials.json, compatible
 // with the layout used by Claude Code.
-package claude
+package claudecode
 
 import (
 	"context"
@@ -328,16 +328,30 @@ func LoggedIn() bool {
 
 // Provider returns a proxy provider backed by the Anthropic API using the
 // given OAuth credential store.
-func Provider(store *Store, models ...string) *providers.Provider {
+func Provider(auth providers.BearerSource, models ...string) *providers.Provider {
 	if len(models) == 0 {
 		models = defaultModelList()
 	}
 	return &providers.Provider{
-		Name:    "claude",
-		Type:    providers.ProviderTypeAnthropic,
-		BaseURL: DefaultBaseURL,
-		Models:  models,
-		Auth:    store,
+		Name:     "claudecode",
+		Source:   providers.SourceClaudeCode,
+		Protocol: providers.ProtocolAnthropic,
+		BaseURL:  DefaultBaseURL,
+		Models:   models,
+		Auth:     auth,
+		Authenticate: func(request *http.Request) error {
+			token, headers, err := auth.BearerToken()
+			if err != nil {
+				return err
+			}
+			request.Header.Set("Authorization", "Bearer "+token)
+			request.Header.Set("anthropic-version", "2023-06-01")
+			request.Header.Set("anthropic-beta", "oauth-2025-04-20")
+			for key, value := range headers {
+				request.Header.Set(key, value)
+			}
+			return nil
+		},
 	}
 }
 

@@ -1,7 +1,6 @@
 package protocols
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -14,7 +13,6 @@ import (
 	"github.com/lsongdev/miya-agents/openai"
 	"github.com/lsongdev/miya-agents/proxy/codec"
 	"github.com/lsongdev/miya-agents/proxy/providers"
-	"github.com/lsongdev/miya-agents/proxy/providers/codex"
 )
 
 const maxObservedResponseBytes = 64 << 20
@@ -82,11 +80,11 @@ func observeNativeResponse(protocol providers.Protocol, stream bool, body []byte
 			var response openai.ChatCompletionResponse
 			return &response, json.Unmarshal(body, &response)
 		case providers.ProtocolOpenAIResponses:
-			var response openai.ResponseObject
-			if err := json.Unmarshal(body, &response); err != nil {
+			response, _, err := codec.DecodeResponse(codec.OpenAIResponses, body)
+			if err != nil {
 				return nil, err
 			}
-			return codex.ChatCompletionFromResponseObject(&response), nil
+			return canonicalResponseToChat(response), nil
 		case providers.ProtocolAnthropic:
 			var response anthropic.Response
 			if err := json.Unmarshal(body, &response); err != nil {
@@ -99,76 +97,22 @@ func observeNativeResponse(protocol providers.Protocol, stream bool, body []byte
 }
 
 func observeNativeStream(protocol providers.Protocol, body []byte) (*openai.ChatCompletionResponse, error) {
-	if protocol == providers.ProtocolAnthropic {
-		response, err := codec.CollectStream(context.Background(), codec.Anthropic, bytes.NewReader(body))
-		if err != nil {
-			return nil, err
-		}
-		return canonicalResponseToChat(response), nil
+	var wireProtocol codec.Protocol
+	switch protocol {
+	case providers.ProtocolOpenAIChat:
+		wireProtocol = codec.OpenAIChat
+	case providers.ProtocolOpenAIResponses:
+		wireProtocol = codec.OpenAIResponses
+	case providers.ProtocolAnthropic:
+		wireProtocol = codec.Anthropic
+	default:
+		return nil, fmt.Errorf("observe unsupported native protocol %q", protocol)
 	}
-	assembler := openai.NewResponseAssembler()
-	var completed *openai.ResponseObject
-	scanner := bufio.NewScanner(bytes.NewReader(body))
-	scanner.Buffer(make([]byte, 64*1024), maxObservedResponseBytes)
-	var eventType string
-	var data []string
-	flush := func() error {
-		if len(data) == 0 {
-			eventType = ""
-			return nil
-		}
-		payload := strings.Join(data, "\n")
-		data = nil
-		if payload == "[DONE]" {
-			eventType = ""
-			return nil
-		}
-		switch protocol {
-		case providers.ProtocolOpenAIChat:
-			var chunk openai.ChatCompletionResponse
-			if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
-				return err
-			}
-			assembler.Update(chunk)
-		case providers.ProtocolOpenAIResponses:
-			if eventType == "response.completed" || eventType == "response.incomplete" || eventType == "response.failed" {
-				var event struct {
-					Response openai.ResponseObject `json:"response"`
-				}
-				if err := json.Unmarshal([]byte(payload), &event); err != nil {
-					return err
-				}
-				completed = &event.Response
-			}
-		}
-		eventType = ""
-		return nil
-	}
-	for scanner.Scan() {
-		line := strings.TrimSuffix(scanner.Text(), "\r")
-		if line == "" {
-			if err := flush(); err != nil {
-				return nil, err
-			}
-			continue
-		}
-		if strings.HasPrefix(line, "event:") {
-			eventType = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
-		} else if strings.HasPrefix(line, "data:") {
-			value := strings.TrimPrefix(line, "data:")
-			data = append(data, strings.TrimPrefix(value, " "))
-		}
-	}
-	if err := scanner.Err(); err != nil {
+	response, err := codec.CollectStream(context.Background(), wireProtocol, bytes.NewReader(body))
+	if err != nil {
 		return nil, err
 	}
-	if err := flush(); err != nil {
-		return nil, err
-	}
-	if completed != nil {
-		return codex.ChatCompletionFromResponseObject(completed), nil
-	}
-	return assembler.Build(), nil
+	return canonicalResponseToChat(response), nil
 }
 
 func copyForwardHeaders(dst, src http.Header) {

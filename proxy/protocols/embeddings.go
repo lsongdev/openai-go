@@ -8,6 +8,7 @@ import (
 
 	"github.com/lsongdev/miya-agents/openai"
 	"github.com/lsongdev/miya-agents/proxy/providers"
+	openaiprovider "github.com/lsongdev/miya-agents/proxy/providers/openai"
 )
 
 // Embeddings serves the OpenAI /v1/embeddings API endpoint.
@@ -34,7 +35,7 @@ func (env *Env) Embeddings(w http.ResponseWriter, r *http.Request) {
 	if !env.resolveUpstream(ctx, embReq.Model, w) {
 		return
 	}
-	client := providers.NewOpenAIClient(ctx.Upstream, env.HTTPClient)
+	client := openaiprovider.Client(ctx.Upstream, env.HTTPClient)
 	resp, err := client.CreateEmbeddings(ctx.Request.Context(), &embReq)
 	if err != nil {
 		WriteError(w, http.StatusBadGateway, fmt.Sprintf("upstream request failed: %v", err))

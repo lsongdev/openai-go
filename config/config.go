@@ -121,7 +121,7 @@ func (c *Config) UnmarshalJSON(data []byte) error {
 type ProviderConfig struct {
 	APIKey   string            `json:"apiKey" yaml:"apiKey"`
 	APIBase  string            `json:"apiBase,omitempty" yaml:"apiBase,omitempty"`   // optional custom base URL
-	Type     string            `json:"type,omitempty" yaml:"type,omitempty"`         // provider adapter/auth type
+	Type     string            `json:"type,omitempty" yaml:"type,omitempty"`         // provider source: openai or anthropic
 	Protocol string            `json:"protocol,omitempty" yaml:"protocol,omitempty"` // optional native wire protocol
 	Models   map[string]string `json:"models,omitempty" yaml:"models,omitempty"`     // public name -> upstream model ID
 }

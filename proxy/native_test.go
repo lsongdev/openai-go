@@ -10,6 +10,9 @@ import (
 	"testing"
 
 	"github.com/lsongdev/miya-agents/proxy/providers"
+	anthropicprovider "github.com/lsongdev/miya-agents/proxy/providers/anthropic"
+	"github.com/lsongdev/miya-agents/proxy/providers/claudecode"
+	providercodex "github.com/lsongdev/miya-agents/proxy/providers/codex"
 )
 
 func TestNativeCodexResponsesPreservesClientPayloadAndStream(t *testing.T) {
@@ -34,13 +37,9 @@ func TestNativeCodexResponsesPreservesClientPayloadAndStream(t *testing.T) {
 	defer upstream.Close()
 
 	p := NewProxy()
-	p.AddProvider(&providers.Provider{
-		Name:    "codex",
-		Type:    providers.ProviderTypeCodex,
-		BaseURL: upstream.URL + "/backend-api/codex",
-		Models:  []string{"gpt-5-codex"},
-		Auth:    staticBearer{token: "codex-token", headers: map[string]string{"chatgpt-account-id": "account-1"}},
-	})
+	provider := providercodex.Provider(staticBearer{token: "codex-token", headers: map[string]string{"chatgpt-account-id": "account-1"}}, "gpt-5-codex")
+	provider.BaseURL = upstream.URL + "/backend-api/codex"
+	p.AddProvider(provider)
 	var observed *ResponseContext
 	p.OnResponse(func(ctx *ResponseContext) { observed = ctx })
 
@@ -81,13 +80,9 @@ func TestNativeAnthropicMessagesPreservesClaudeCodeExtensions(t *testing.T) {
 	defer upstream.Close()
 
 	p := NewProxy()
-	p.AddProvider(&providers.Provider{
-		Name:    "claude",
-		Type:    providers.ProviderTypeAnthropic,
-		BaseURL: upstream.URL,
-		Models:  []string{"claude-sonnet-4-5"},
-		Auth:    staticBearer{token: "claude-token"},
-	})
+	provider := claudecode.Provider(staticBearer{token: "claude-token"}, "claude-sonnet-4-5")
+	provider.BaseURL = upstream.URL
+	p.AddProvider(provider)
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(requestBody))
 	req.Header.Set("anthropic-beta", "oauth-2025-04-20,interleaved-thinking-2025-05-14")
@@ -129,7 +124,8 @@ func TestNativeProviderErrorIsPassedThrough(t *testing.T) {
 	}))
 	defer upstream.Close()
 	p := NewProxy()
-	p.AddProvider(&providers.Provider{Name: "claude", Type: providers.ProviderTypeAnthropic, BaseURL: upstream.URL, APIKey: "key", Models: []string{"claude"}})
+	p.AddProvider(anthropicprovider.Provider("anthropic", upstream.URL, "key"))
+	p.FindProvider("anthropic").Models = []string{"claude"}
 	w := httptest.NewRecorder()
 	p.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"claude","max_tokens":8,"messages":[{"role":"user","content":"hi"}]}`)))
 	if w.Code != http.StatusTooManyRequests || !strings.Contains(w.Body.String(), "rate_limit_error") {
@@ -150,7 +146,8 @@ func TestNativeAnthropicStreamIsObserved(t *testing.T) {
 	defer upstream.Close()
 
 	p := NewProxy()
-	p.AddProvider(&providers.Provider{Name: "claude", Type: providers.ProviderTypeAnthropic, BaseURL: upstream.URL, APIKey: "key", Models: []string{"claude"}})
+	p.AddProvider(anthropicprovider.Provider("anthropic", upstream.URL, "key"))
+	p.FindProvider("anthropic").Models = []string{"claude"}
 	var observed *ResponseContext
 	p.OnResponse(func(ctx *ResponseContext) { observed = ctx })
 	w := httptest.NewRecorder()

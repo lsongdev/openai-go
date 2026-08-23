@@ -6,28 +6,20 @@ import (
 	"os"
 
 	"github.com/lsongdev/miya-agents/proxy"
+	anthropicprovider "github.com/lsongdev/miya-agents/proxy/providers/anthropic"
+	openaiprovider "github.com/lsongdev/miya-agents/proxy/providers/openai"
 )
 
 func main() {
 	r := proxy.NewProxy()
 
-	openaiProvider := &proxy.Provider{
-		Name:    "openai",
-		Type:    proxy.ProviderTypeOpenAI,
-		BaseURL: "https://api.openai.com",
-		APIKey:  os.Getenv("OPENAI_API_KEY"),
-		Models:  []string{"gpt-4-turbo", "gpt-4o", "deepseek-chat"},
-	}
+	openaiProvider := openaiprovider.Provider("openai", "https://api.openai.com", os.Getenv("OPENAI_API_KEY"))
+	openaiProvider.Models = []string{"gpt-4-turbo", "gpt-4o", "deepseek-chat"}
 	r.AddProvider(openaiProvider)
 
-	anthropicProvider := &proxy.Provider{
-		Name:             "anthropic",
-		Type:             proxy.ProviderTypeAnthropic,
-		BaseURL:          "https://api.anthropic.com",
-		APIKey:           os.Getenv("ANTHROPIC_API_KEY"),
-		DefaultMaxTokens: 4096,
-		Models:           []string{"claude-3-7-sonnet-20250219"},
-	}
+	anthropicProvider := anthropicprovider.Provider("anthropic", "https://api.anthropic.com", os.Getenv("ANTHROPIC_API_KEY"))
+	anthropicProvider.DefaultMaxTokens = 4096
+	anthropicProvider.Models = []string{"claude-3-7-sonnet-20250219"}
 	r.AddProvider(anthropicProvider)
 
 	r.OnRequest(func(ctx *proxy.RequestContext) error {

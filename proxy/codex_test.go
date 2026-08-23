@@ -10,6 +10,7 @@ import (
 
 	"github.com/lsongdev/miya-agents/openai"
 	"github.com/lsongdev/miya-agents/proxy/providers"
+	providercodex "github.com/lsongdev/miya-agents/proxy/providers/codex"
 )
 
 type staticTokens struct{ token string }
@@ -97,12 +98,8 @@ func TestProxy_Codex_ResponsesStream(t *testing.T) {
 
 func codexProvider(t *testing.T, baseURL string) *providers.Provider {
 	t.Helper()
-	p := &providers.Provider{
-		Name:    "codex-test",
-		Type:    providers.ProviderTypeCodex,
-		BaseURL: baseURL,
-		Models:  []string{"gpt-5-codex"},
-		Auth:    staticTokens{token: "tok"},
-	}
+	p := providercodex.Provider(staticTokens{token: "tok"}, "gpt-5-codex")
+	p.Name = "codex-test"
+	p.BaseURL = baseURL
 	return p
 }

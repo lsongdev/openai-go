@@ -17,8 +17,10 @@ import (
 	"github.com/lsongdev/miya-agents/mcp"
 	"github.com/lsongdev/miya-agents/openai"
 	"github.com/lsongdev/miya-agents/proxy"
-	"github.com/lsongdev/miya-agents/proxy/providers/anthropic/claude"
+	anthropicprovider "github.com/lsongdev/miya-agents/proxy/providers/anthropic"
+	"github.com/lsongdev/miya-agents/proxy/providers/claudecode"
 	"github.com/lsongdev/miya-agents/proxy/providers/codex"
+	openaiprovider "github.com/lsongdev/miya-agents/proxy/providers/openai"
 	"github.com/lsongdev/miya-agents/session"
 )
 
@@ -358,13 +360,13 @@ func addLocalProviders(r *proxy.Proxy) int {
 			log.Printf("[PROXY] load codex credentials: %v", err)
 		}
 	}
-	if r.FindProvider("claude") == nil && claude.LoggedIn() {
-		if store, err := claude.LoadStore(); err == nil {
-			r.AddProvider(claude.Provider(store))
+	if r.FindProvider("claudecode") == nil && claudecode.LoggedIn() {
+		if store, err := claudecode.LoadStore(); err == nil {
+			r.AddProvider(claudecode.Provider(store))
 			added++
-			log.Printf("[PROXY] registered claude provider (%s)", store.Path())
+			log.Printf("[PROXY] registered claudecode provider (%s)", store.Path())
 		} else {
-			log.Printf("[PROXY] load claude credentials: %v", err)
+			log.Printf("[PROXY] load claudecode credentials: %v", err)
 		}
 	}
 	return added
@@ -392,22 +394,32 @@ func serveCommand() {
 		for publicModel := range p.Models {
 			models = append(models, publicModel)
 		}
-		provider := &proxy.Provider{
-			Name:             name,
-			Type:             proxy.ProviderType(p.Type),
-			Protocol:         proxy.Protocol(p.Protocol),
-			BaseURL:          p.APIBase,
-			APIKey:           p.APIKey,
-			DefaultMaxTokens: 4096,
-			Models:           models,
-			ModelAliases:     p.Models,
+		source := proxy.Source(strings.TrimSpace(p.Type))
+		if source == "" {
+			source = proxy.SourceOpenAI
 		}
+		var provider *proxy.Provider
+		switch source {
+		case proxy.SourceOpenAI:
+			provider = openaiprovider.Provider(name, p.APIBase, p.APIKey)
+		case proxy.SourceAnthropic:
+			provider = anthropicprovider.Provider(name, p.APIBase, p.APIKey)
+		default:
+			fmt.Printf("Unsupported configured provider source %q for %s; use a local login for codex or claudecode.\n", source, name)
+			os.Exit(1)
+		}
+		if p.Protocol != "" {
+			provider.Protocol = proxy.Protocol(p.Protocol)
+		}
+		provider.DefaultMaxTokens = 4096
+		provider.Models = models
+		provider.ModelAliases = p.Models
 		r.AddProvider(provider)
 		providerCount++
 	}
 	providerCount += addLocalProviders(r)
 	if providerCount == 0 {
-		fmt.Println("No providers configured and no local Codex or Claude login found.")
+		fmt.Println("No providers configured and no local Codex or Claude Code login found.")
 		os.Exit(1)
 	}
 	r.OnRequest(func(ctx *proxy.RequestContext) error {

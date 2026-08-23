@@ -1,4 +1,4 @@
-package claude
+package claudecode
 
 import (
 	"encoding/json"
@@ -71,8 +71,8 @@ func TestProviderFactory(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := Provider(store, "claude-sonnet-4-5")
-	if p.Type != providers.ProviderTypeAnthropic {
-		t.Errorf("type = %s", p.Type)
+	if p.Source != providers.SourceClaudeCode {
+		t.Errorf("source = %s", p.Source)
 	}
 	if p.BaseURL != DefaultBaseURL {
 		t.Errorf("base url = %s", p.BaseURL)

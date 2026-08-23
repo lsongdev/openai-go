@@ -45,7 +45,8 @@ func (env *Env) forwardTranslated(ctx *providers.RequestContext, clientProtocol 
 		WriteErrorForProtocol(w, clientProtocol, resp.StatusCode, err.Error())
 		return nil, err
 	}
-	upstreamIsStream := ctx.Upstream.AlwaysStream || strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream")
+	contentType := strings.ToLower(resp.Header.Get("Content-Type"))
+	upstreamIsStream := strings.Contains(contentType, "text/event-stream") || (contentType == "" && ctx.Upstream.AlwaysStream)
 	if canonicalRequest.Stream && upstreamIsStream {
 		response, err := codec.TranslateStream(
 			ctx.Request.Context(), codec.Protocol(upstreamProtocol), codec.Protocol(clientProtocol), resp.Body, w,
