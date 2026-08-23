@@ -18,10 +18,7 @@ func Provider(name, baseURL, apiKey string) *providers.Provider {
 		BaseURL:  baseURL,
 		APIKey:   apiKey,
 	}
-	provider.Authenticate = func(request *http.Request) error {
-		request.Header.Set("Authorization", "Bearer "+provider.APIKey)
-		return nil
-	}
+	provider.Client = Client(provider, http.DefaultClient)
 	return provider
 }
 
@@ -30,6 +27,9 @@ func Client(provider *providers.Provider, httpClient *http.Client) *openaiapi.Cl
 	client, _ := openaiapi.NewClient(&openaiapi.Configuration{
 		API:    provider.BaseURL,
 		APIKey: provider.APIKey,
+	})
+	client.SetHeaders(func() (map[string]string, error) {
+		return map[string]string{"Authorization": "Bearer " + provider.APIKey}, nil
 	})
 	client.SetHTTPClient(httpClient)
 	return client

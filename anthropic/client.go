@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/lsongdev/miya-agents/sse"
 )
@@ -66,6 +67,32 @@ func (c *Client) applyHeaders(req *http.Request) error {
 	return nil
 }
 
+// NewRequest builds an authenticated request without encoding or decoding its
+// body. Endpoint may be absolute or relative to the configured API URL.
+func (c *Client) NewRequest(ctx context.Context, method, endpoint string, body io.Reader) (*http.Request, error) {
+	if !strings.HasPrefix(endpoint, "http://") && !strings.HasPrefix(endpoint, "https://") {
+		endpoint = strings.TrimRight(c.config.API, "/") + "/" + strings.TrimLeft(endpoint, "/")
+	}
+	request, err := http.NewRequestWithContext(ctx, method, endpoint, body)
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+	if body != nil {
+		request.Header.Set("Content-Type", "application/json")
+	}
+	if err := c.applyHeaders(request); err != nil {
+		return nil, fmt.Errorf("request headers: %w", err)
+	}
+	request.Header.Set("anthropic-version", "2023-06-01")
+	return request, nil
+}
+
+// Do executes a request and returns the raw response. It does not interpret
+// status codes or consume the response body; the caller owns response.Body.
+func (c *Client) Do(request *http.Request) (*http.Response, error) {
+	return c.client.Do(request)
+}
+
 func (c *Client) makeRequest(ctx context.Context, method, path string, body interface{}) (*http.Response, error) {
 	var bodyReader io.Reader
 	if body != nil {
@@ -76,20 +103,12 @@ func (c *Client) makeRequest(ctx context.Context, method, path string, body inte
 		bodyReader = bytes.NewReader(data)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, c.config.API+path, bodyReader)
+	req, err := c.NewRequest(ctx, method, path, bodyReader)
 	if err != nil {
-		return nil, fmt.Errorf("create request error: %w", err)
+		return nil, err
 	}
 
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	if err := c.applyHeaders(req); err != nil {
-		return nil, fmt.Errorf("auth error: %w", err)
-	}
-	req.Header.Set("anthropic-version", "2023-06-01")
-
-	resp, err := c.client.Do(req)
+	resp, err := c.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("request error: %w", err)
 	}
@@ -154,15 +173,10 @@ func (c *Client) CreateMessageStream(ctx context.Context, req *Request) (*Messag
 		return nil, fmt.Errorf("json marshal error: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.config.API+"/v1/messages", bytes.NewReader(data))
+	httpReq, err := c.NewRequest(ctx, http.MethodPost, "/v1/messages", bytes.NewReader(data))
 	if err != nil {
 		return nil, fmt.Errorf("create request error: %w", err)
 	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	if err := c.applyHeaders(httpReq); err != nil {
-		return nil, fmt.Errorf("auth error: %w", err)
-	}
-	httpReq.Header.Set("anthropic-version", "2023-06-01")
 
 	stream, err := sse.Do(ctx, c.client, httpReq)
 	if err != nil {

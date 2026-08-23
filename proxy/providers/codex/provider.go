@@ -5,12 +5,12 @@ package codex
 import (
 	"encoding/base64"
 	"encoding/json"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/lsongdev/miya-agents/openai"
 	"github.com/lsongdev/miya-agents/proxy/providers"
 )
 
@@ -28,7 +28,7 @@ func Provider(tokens providers.BearerSource, models ...string) *providers.Provid
 	if len(models) == 0 {
 		models, catalog = loadModelCatalog()
 	}
-	return &providers.Provider{
+	provider := &providers.Provider{
 		Name:         "codex",
 		Source:       providers.SourceCodex,
 		Protocol:     providers.ProtocolOpenAIResponses,
@@ -37,18 +37,6 @@ func Provider(tokens providers.BearerSource, models ...string) *providers.Provid
 		ModelCatalog: catalog,
 		Auth:         tokens,
 		AlwaysStream: true,
-		Authenticate: func(request *http.Request) error {
-			token, headers, err := tokens.BearerToken()
-			if err != nil {
-				return err
-			}
-			request.Header.Set("Authorization", "Bearer "+token)
-			request.Header.Set("OpenAI-Beta", "responses=experimental")
-			for key, value := range headers {
-				request.Header.Set(key, value)
-			}
-			return nil
-		},
 		PrepareRequest: func(protocol providers.Protocol, body []byte) ([]byte, error) {
 			if protocol != providers.ProtocolOpenAIResponses {
 				return body, nil
@@ -63,6 +51,23 @@ func Provider(tokens providers.BearerSource, models ...string) *providers.Provid
 			return json.Marshal(request)
 		},
 	}
+	client, _ := openai.NewClient(&openai.Configuration{API: DefaultBaseURL})
+	client.SetHeaders(func() (map[string]string, error) {
+		token, headers, err := tokens.BearerToken()
+		if err != nil {
+			return nil, err
+		}
+		result := map[string]string{
+			"Authorization": "Bearer " + token,
+			"OpenAI-Beta":   "responses=experimental",
+		}
+		for key, value := range headers {
+			result[key] = value
+		}
+		return result, nil
+	})
+	provider.Client = client
+	return provider
 }
 
 func loadModelCatalog() ([]string, []map[string]any) {

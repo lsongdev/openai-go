@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/lsongdev/miya-agents/anthropic"
 	"github.com/lsongdev/miya-agents/proxy/providers"
 )
 
@@ -332,27 +333,31 @@ func Provider(auth providers.BearerSource, models ...string) *providers.Provider
 	if len(models) == 0 {
 		models = defaultModelList()
 	}
-	return &providers.Provider{
+	provider := &providers.Provider{
 		Name:     "claudecode",
 		Source:   providers.SourceClaudeCode,
 		Protocol: providers.ProtocolAnthropic,
 		BaseURL:  DefaultBaseURL,
 		Models:   models,
 		Auth:     auth,
-		Authenticate: func(request *http.Request) error {
-			token, headers, err := auth.BearerToken()
-			if err != nil {
-				return err
-			}
-			request.Header.Set("Authorization", "Bearer "+token)
-			request.Header.Set("anthropic-version", "2023-06-01")
-			request.Header.Set("anthropic-beta", "oauth-2025-04-20")
-			for key, value := range headers {
-				request.Header.Set(key, value)
-			}
-			return nil
-		},
 	}
+	client := anthropic.NewClient(&anthropic.Configuration{API: DefaultBaseURL})
+	client.SetHeaders(func() (map[string]string, error) {
+		token, headers, err := auth.BearerToken()
+		if err != nil {
+			return nil, err
+		}
+		result := map[string]string{
+			"Authorization":  "Bearer " + token,
+			"anthropic-beta": "oauth-2025-04-20",
+		}
+		for key, value := range headers {
+			result[key] = value
+		}
+		return result, nil
+	})
+	provider.Client = client
+	return provider
 }
 
 func defaultModelList() []string {

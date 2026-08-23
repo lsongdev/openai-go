@@ -42,9 +42,11 @@ proxy/
 `-- codec/                request, response, and SSE protocol transforms
 ```
 
-The repository-level `openai/` and `anthropic/` packages remain the reusable
-API clients and wire types. Source adapters are intentionally thin and do not
-duplicate those clients or protocol models.
+The repository-level `openai/` and `anthropic/` packages own the reusable API
+clients and wire types. Their low-level `NewRequest` and `Do` methods preserve
+raw request bodies, status codes, response headers, response bodies, and SSE
+streams. Proxy source adapters configure and call those clients; they do not
+duplicate client transports or protocol models.
 
 ## Request Flow
 

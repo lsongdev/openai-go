@@ -20,48 +20,81 @@ type ChatClient interface {
 }
 
 type Client struct {
-	config *Configuration
-	client *http.Client
+	config  *Configuration
+	client  *http.Client
+	headers func() (map[string]string, error)
 }
 
 func NewClient(config *Configuration) (*Client, error) {
-	return &Client{config, http.DefaultClient}, nil
+	return &Client{config: config, client: http.DefaultClient}, nil
 }
 
 func (c *Client) SetHTTPClient(client *http.Client) {
 	c.client = client
 }
 
-func (client *Client) MakeRequest(ctx context.Context, path string, data any) (io.ReadCloser, error) {
-	var req *http.Request
-	var err error
+// SetHeaders sets a per-request header provider. When set it replaces the
+// default bearer authentication.
+func (c *Client) SetHeaders(fn func() (map[string]string, error)) {
+	c.headers = fn
+}
 
-	var payload []byte
+// NewRequest builds an authenticated request without encoding or decoding its
+// body. Endpoint may be absolute or relative to the configured API URL.
+func (c *Client) NewRequest(ctx context.Context, method, endpoint string, body io.Reader) (*http.Request, error) {
+	if !strings.HasPrefix(endpoint, "http://") && !strings.HasPrefix(endpoint, "https://") {
+		endpoint = strings.TrimRight(c.config.API, "/") + "/" + strings.TrimLeft(endpoint, "/")
+	}
+	request, err := http.NewRequestWithContext(ctx, method, endpoint, body)
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+	if body != nil {
+		request.Header.Set("Content-Type", "application/json")
+	}
+	if c.headers != nil {
+		headers, err := c.headers()
+		if err != nil {
+			return nil, fmt.Errorf("request headers: %w", err)
+		}
+		for key, value := range headers {
+			request.Header.Set(key, value)
+		}
+	} else if c.config.APIKey != "" {
+		request.Header.Set("Authorization", "Bearer "+c.config.APIKey)
+	}
+	return request, nil
+}
+
+// Do executes a request and returns the raw response. It does not interpret
+// status codes or consume the response body; the caller owns response.Body.
+func (c *Client) Do(request *http.Request) (*http.Response, error) {
+	return c.client.Do(request)
+}
+
+func (client *Client) MakeRequest(ctx context.Context, path string, data any) (io.ReadCloser, error) {
+	var body io.Reader
 	if data != nil {
-		payload, err = json.Marshal(data)
+		payload, err := json.Marshal(data)
 		if err != nil {
 			return nil, fmt.Errorf("json error: %v", err)
 		}
-		req, err = http.NewRequestWithContext(ctx, "POST", client.config.API+path, bytes.NewBuffer(payload))
-		if err != nil {
-			return nil, fmt.Errorf("invalid request: %v", err)
-		}
-		req.Header.Add("Content-Type", "application/json")
-	} else {
-		req, err = http.NewRequestWithContext(ctx, "GET", client.config.API+path, nil)
-		if err != nil {
-			return nil, fmt.Errorf("invalid request: %v", err)
-		}
+		body = bytes.NewReader(payload)
 	}
-
-	req.Header.Add("Authorization", "Bearer "+client.config.APIKey)
-	res, err := client.client.Do(req)
+	method := http.MethodGet
+	if body != nil {
+		method = http.MethodPost
+	}
+	request, err := client.NewRequest(ctx, method, path, body)
+	if err != nil {
+		return nil, err
+	}
+	res, err := client.Do(request)
 	if err != nil {
 		return nil, fmt.Errorf("cannot make request: %v", err)
 	}
 	if res.StatusCode != http.StatusOK {
-		// d, _ := io.ReadAll(res.Body)
-		// log.Println(string(d), string(payload))
+		res.Body.Close()
 		return nil, fmt.Errorf("invalid status code: %s", res.Status)
 	}
 	return res.Body, nil
@@ -266,12 +299,10 @@ func (c *Client) CreateChatCompletionStream(ctx context.Context, request *ChatCo
 		return nil, fmt.Errorf("json error: %v", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", c.config.API+"/chat/completions", bytes.NewBuffer(payload))
+	req, err := c.NewRequest(ctx, http.MethodPost, "/chat/completions", bytes.NewReader(payload))
 	if err != nil {
 		return nil, fmt.Errorf("invalid request: %v", err)
 	}
-	req.Header.Add("Content-Type", "application/json")
-	req.Header.Add("Authorization", "Bearer "+c.config.APIKey)
 
 	stream, err := sse.Do(ctx, c.client, req)
 	if err != nil {

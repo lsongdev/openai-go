@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"context"
 	"net/http"
 	"testing"
 
@@ -17,11 +18,8 @@ func TestProvider(t *testing.T) {
 	}
 
 	provider.APIKey = "updated-key"
-	request, err := http.NewRequest(http.MethodPost, provider.BaseURL, nil)
+	request, err := provider.Client.NewRequest(context.Background(), http.MethodPost, provider.BaseURL, nil)
 	if err != nil {
-		t.Fatal(err)
-	}
-	if err := provider.Authenticate(request); err != nil {
 		t.Fatal(err)
 	}
 	if got := request.Header.Get("Authorization"); got != "Bearer updated-key" {

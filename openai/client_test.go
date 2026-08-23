@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -30,6 +31,40 @@ func TestSetHTTPClient(t *testing.T) {
 	c.SetHTTPClient(customClient)
 	if c.client != customClient {
 		t.Error("HTTP client was not set")
+	}
+}
+
+func TestRawRequestPreservesResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/responses" {
+			t.Errorf("path = %q, want /v1/responses", r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer test-key" {
+			t.Errorf("authorization = %q", got)
+		}
+		body, _ := io.ReadAll(r.Body)
+		if got := string(body); got != `{"unknown_extension":true}` {
+			t.Errorf("body = %s", got)
+		}
+		w.Header().Set("X-Upstream", "preserved")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"custom_error":"slow_down"}`))
+	}))
+	defer server.Close()
+
+	client, _ := NewClient(&Configuration{API: server.URL + "/v1", APIKey: "test-key"})
+	request, err := client.NewRequest(context.Background(), http.MethodPost, "responses", strings.NewReader(`{"unknown_extension":true}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	body, _ := io.ReadAll(response.Body)
+	if response.StatusCode != http.StatusTooManyRequests || response.Header.Get("X-Upstream") != "preserved" || string(body) != `{"custom_error":"slow_down"}` {
+		t.Fatalf("raw response = status %d, headers %v, body %s", response.StatusCode, response.Header, body)
 	}
 }
 

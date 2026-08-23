@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"path"
@@ -37,6 +38,14 @@ type BearerSource interface {
 	BearerToken() (token string, headers map[string]string, err error)
 }
 
+// Client is the raw transport surface implemented by the top-level provider
+// clients. Responses remain untouched for protocol handlers to proxy or decode.
+type Client interface {
+	NewRequest(context.Context, string, string, io.Reader) (*http.Request, error)
+	Do(*http.Request) (*http.Response, error)
+	SetHTTPClient(*http.Client)
+}
+
 type Provider struct {
 	Name             string
 	Source           Source
@@ -48,12 +57,11 @@ type Provider struct {
 	Models           []string
 	ModelAliases     map[string]string
 	ModelCatalog     []map[string]any
-	Authenticate     func(*http.Request) error
+	Client           Client
 	PrepareRequest   func(protocol Protocol, body []byte) ([]byte, error)
 	AlwaysStream     bool
 
-	// Auth exposes rotating OAuth credentials to source adapters. Adapters that
-	// need provider-specific headers should install Authenticate as well.
+	// Auth exposes rotating OAuth credentials to source adapters.
 	Auth BearerSource
 }
 
@@ -109,17 +117,18 @@ func (p *Provider) newRequest(ctx context.Context, protocol Protocol, body []byt
 			return nil, fmt.Errorf("provider %q: prepare request: %w", p.Name, err)
 		}
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	var req *http.Request
+	if p.Client != nil {
+		req, err = p.Client.NewRequest(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	} else {
+		req, err = http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	}
 	if err != nil {
 		return nil, fmt.Errorf("provider %q: create request: %w", p.Name, err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
-	if p.Authenticate != nil {
-		if err := p.Authenticate(req); err != nil {
-			return nil, fmt.Errorf("provider %q: authenticate request: %w", p.Name, err)
-		}
-	} else if p.Auth != nil {
+	if p.Client == nil && p.Auth != nil {
 		token, headers, err := p.Auth.BearerToken()
 		if err != nil {
 			return nil, fmt.Errorf("provider %q: authenticate request: %w", p.Name, err)
@@ -128,13 +137,28 @@ func (p *Provider) newRequest(ctx context.Context, protocol Protocol, body []byt
 		for key, value := range headers {
 			req.Header.Set(key, value)
 		}
-	} else if p.APIKey != "" {
+	} else if p.Client == nil && p.APIKey != "" {
 		req.Header.Set("Authorization", "Bearer "+p.APIKey)
 	}
 	for key, value := range p.Headers {
 		req.Header.Set(key, value)
 	}
 	return req, nil
+}
+
+// SetHTTPClient binds the proxy's shared transport to the source client.
+func (p *Provider) SetHTTPClient(client *http.Client) {
+	if p.Client != nil {
+		p.Client.SetHTTPClient(client)
+	}
+}
+
+// Do executes an upstream request through the source client when available.
+func (p *Provider) Do(fallback *http.Client, request *http.Request) (*http.Response, error) {
+	if p.Client != nil {
+		return p.Client.Do(request)
+	}
+	return fallback.Do(request)
 }
 
 func (p *Provider) rewriteModelAlias(body []byte) ([]byte, error) {

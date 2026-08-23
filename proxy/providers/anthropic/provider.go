@@ -3,8 +3,7 @@
 package anthropic
 
 import (
-	"net/http"
-
+	anthropicapi "github.com/lsongdev/miya-agents/anthropic"
 	"github.com/lsongdev/miya-agents/proxy/providers"
 )
 
@@ -17,10 +16,10 @@ func Provider(name, baseURL, apiKey string) *providers.Provider {
 		BaseURL:  baseURL,
 		APIKey:   apiKey,
 	}
-	provider.Authenticate = func(request *http.Request) error {
-		request.Header.Set("x-api-key", provider.APIKey)
-		request.Header.Set("anthropic-version", "2023-06-01")
-		return nil
-	}
+	client := anthropicapi.NewClient(&anthropicapi.Configuration{API: baseURL, APIKey: apiKey})
+	client.SetHeaders(func() (map[string]string, error) {
+		return map[string]string{"x-api-key": provider.APIKey}, nil
+	})
+	provider.Client = client
 	return provider
 }

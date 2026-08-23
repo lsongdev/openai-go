@@ -30,7 +30,7 @@ func (env *Env) forwardTranslated(ctx *providers.RequestContext, clientProtocol 
 		return nil, err
 	}
 	copyForwardHeaders(req.Header, ctx.Request.Header)
-	resp, err := env.HTTPClient.Do(req)
+	resp, err := ctx.Upstream.Do(env.HTTPClient, req)
 	if err != nil {
 		WriteErrorForProtocol(w, clientProtocol, http.StatusBadGateway, "upstream request failed: "+err.Error())
 		return nil, err

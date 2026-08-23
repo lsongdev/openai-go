@@ -60,10 +60,14 @@ func (p *Proxy) SetHTTPClient(client *http.Client) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.client = client
+	for _, provider := range p.providers {
+		provider.SetHTTPClient(client)
+	}
 }
 
 func (p *Proxy) AddProvider(provider *providers.Provider) {
 	p.mu.Lock()
+	provider.SetHTTPClient(p.client)
 	p.providers[provider.Name] = provider
 	p.mu.Unlock()
 }

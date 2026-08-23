@@ -25,7 +25,7 @@ func (env *Env) forwardNative(ctx *providers.RequestContext, protocol providers.
 	}
 	copyForwardHeaders(req.Header, ctx.Request.Header)
 
-	resp, err := env.HTTPClient.Do(req)
+	resp, err := ctx.Upstream.Do(env.HTTPClient, req)
 	if err != nil {
 		WriteErrorForProtocol(w, protocol, http.StatusBadGateway, "upstream request failed: "+err.Error())
 		return nil, err

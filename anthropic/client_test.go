@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -30,6 +31,43 @@ func TestSetHTTPClient(t *testing.T) {
 	c.SetHTTPClient(customClient)
 	if c.client != customClient {
 		t.Error("HTTP client was not set")
+	}
+}
+
+func TestRawRequestPreservesResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/messages" {
+			t.Errorf("path = %q, want /v1/messages", r.URL.Path)
+		}
+		if got := r.Header.Get("x-api-key"); got != "test-key" {
+			t.Errorf("x-api-key = %q", got)
+		}
+		if got := r.Header.Get("anthropic-version"); got != "2023-06-01" {
+			t.Errorf("anthropic-version = %q", got)
+		}
+		body, _ := io.ReadAll(r.Body)
+		if got := string(body); got != `{"unknown_extension":true}` {
+			t.Errorf("body = %s", got)
+		}
+		w.Header().Set("X-Upstream", "preserved")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"type":"error","extra":true}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(&Configuration{API: server.URL, APIKey: "test-key"})
+	request, err := client.NewRequest(context.Background(), http.MethodPost, "/v1/messages", strings.NewReader(`{"unknown_extension":true}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	body, _ := io.ReadAll(response.Body)
+	if response.StatusCode != http.StatusBadRequest || response.Header.Get("X-Upstream") != "preserved" || string(body) != `{"type":"error","extra":true}` {
+		t.Fatalf("raw response = status %d, headers %v, body %s", response.StatusCode, response.Header, body)
 	}
 }
 
