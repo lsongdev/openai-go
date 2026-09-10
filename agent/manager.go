@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/lsongdev/miya-agents/acp"
+	"github.com/lsongdev/miya-agents/anthropic"
 	"github.com/lsongdev/miya-agents/config"
 	"github.com/lsongdev/miya-agents/openai"
 	"github.com/lsongdev/miya-agents/session"
@@ -30,38 +31,39 @@ func NewAgentManager(config *config.Config) *Manager {
 	}
 }
 
-func (m *Manager) UseAgent(name string) (a *Agent, err error) {
-	ac, ok := m.config.Profiles[name]
+func (m *Manager) UseAgent(name string) (*Agent, error) {
+	profile, ok := m.config.Profiles[name]
 	if !ok {
-		err = fmt.Errorf("agent not found: %s", name)
-		return
+		return nil, fmt.Errorf("agent not found: %s", name)
 	}
-	pc, ok := m.config.Providers[ac.Provider]
+	provider, ok := m.config.Providers[profile.Provider]
 	if !ok {
-		err = fmt.Errorf("provider not found: %s", ac.Provider)
-		return
+		return nil, fmt.Errorf("provider not found: %s", profile.Provider)
 	}
-	llm, err := openai.NewClient(&openai.Configuration{
-		API:    pc.APIBase,
-		APIKey: pc.APIKey,
-	})
-	if err != nil {
-		return
+
+	var stream StreamFunc
+	switch strings.ToLower(strings.TrimSpace(provider.Type)) {
+	case "", "openai":
+		client, err := openai.NewClient(&openai.Configuration{API: provider.APIBase, APIKey: provider.APIKey})
+		if err != nil {
+			return nil, err
+		}
+		stream = client.CreateChatCompletionStream
+	case "anthropic":
+		client := anthropic.NewClient(&anthropic.Configuration{API: provider.APIBase, APIKey: provider.APIKey})
+		stream = client.CreateChatCompletionStream
+	default:
+		return nil, fmt.Errorf("unsupported provider type %q", provider.Type)
 	}
-	a = &Agent{
-		Name:      name,
-		LLM:       llm,
-		Config:    ac,
-		toolsMap:  make(map[string]openai.Tool),
-		toolsDefs: []openai.ToolDef{},
-	}
+
+	a := New(name, profile, stream)
 	a.BuildTools()
 	mcpManager := tools.NewMcpManager(m.config.McpServers)
 	for _, tool := range mcpManager.Tools {
-		a.AddTool(tool)
+		a.Use(tool)
 	}
-	a.AddTool(tools.NewSubagentTool(m))
-	return
+	a.Use(tools.NewSubagentTool(m))
+	return a, nil
 }
 
 func (m *Manager) defaultAgentName() (string, error) {

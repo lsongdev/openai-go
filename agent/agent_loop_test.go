@@ -12,17 +12,15 @@ import (
 	"github.com/lsongdev/miya-agents/session"
 )
 
-type fakeLLM struct {
-	chunks []openai.ChatCompletionResponse
-}
-
-func (m *fakeLLM) CreateChatCompletionStream(context.Context, *openai.ChatCompletionRequest) (<-chan openai.ChatCompletionResponse, error) {
-	ch := make(chan openai.ChatCompletionResponse, len(m.chunks))
-	for _, chunk := range m.chunks {
-		ch <- chunk
+func fakeStream(chunks ...openai.ChatCompletionResponse) StreamFunc {
+	return func(context.Context, *openai.ChatCompletionRequest) (<-chan openai.ChatCompletionResponse, error) {
+		ch := make(chan openai.ChatCompletionResponse, len(chunks))
+		for _, chunk := range chunks {
+			ch <- chunk
+		}
+		close(ch)
+		return ch, nil
 	}
-	close(ch)
-	return ch, nil
 }
 
 type discardSink struct{}
@@ -37,10 +35,7 @@ func (discardSink) Usage(UsageEvent) error             { return nil }
 func (discardSink) Done() error                        { return nil }
 
 func TestRunAgentLoopRejectsEmptyStream(t *testing.T) {
-	ag := &Agent{
-		Config: &config.ProfileConfig{ModelName: "test"},
-		LLM:    &fakeLLM{},
-	}
+	ag := New("test", &config.ProfileConfig{ModelName: "test"}, fakeStream())
 
 	err := ag.RunAgentLoop(context.Background(), session.New("test"), discardSink{})
 	if err == nil || !strings.Contains(err.Error(), "closed without a response") {
@@ -50,13 +45,10 @@ func TestRunAgentLoopRejectsEmptyStream(t *testing.T) {
 
 func TestRunAgentLoopRejectsInterruptedStream(t *testing.T) {
 	message := openai.ChatCompletionMessage{Role: openai.RoleAssistant, Content: "partial"}
-	ag := &Agent{
-		Config: &config.ProfileConfig{ModelName: "test"},
-		LLM: &fakeLLM{chunks: []openai.ChatCompletionResponse{
-			{Choices: []openai.ChatCompletionChoice{{Index: 0, Delta: &message}}},
-			{Error: &openai.Error{Type: "stream_error", Message: "connection reset"}},
-		}},
-	}
+	ag := New("test", &config.ProfileConfig{ModelName: "test"}, fakeStream(
+		openai.ChatCompletionResponse{Choices: []openai.ChatCompletionChoice{{Index: 0, Delta: &message}}},
+		openai.ChatCompletionResponse{Error: &openai.Error{Type: "stream_error", Message: "connection reset"}},
+	))
 	sess := session.New("test")
 
 	err := ag.RunAgentLoop(context.Background(), sess, discardSink{})
@@ -75,12 +67,9 @@ func TestRunAgentLoopRejectsToolCallWithoutID(t *testing.T) {
 			Function: openai.FunctionCall{Name: "read_file", Arguments: `{}`},
 		}},
 	}
-	ag := &Agent{
-		Config: &config.ProfileConfig{ModelName: "test"},
-		LLM: &fakeLLM{chunks: []openai.ChatCompletionResponse{{
-			Choices: []openai.ChatCompletionChoice{{Index: 0, Delta: &message}},
-		}}},
-	}
+	ag := New("test", &config.ProfileConfig{ModelName: "test"}, fakeStream(
+		openai.ChatCompletionResponse{Choices: []openai.ChatCompletionChoice{{Index: 0, Delta: &message}}},
+	))
 
 	err := ag.RunAgentLoop(context.Background(), session.New("test"), discardSink{})
 	if err == nil || !strings.Contains(err.Error(), "missing an id") {
@@ -98,12 +87,9 @@ func TestRunAgentLoopReturnsSaveError(t *testing.T) {
 	t.Cleanup(func() { config.ConfigPath = oldConfigPath })
 
 	message := openai.ChatCompletionMessage{Role: openai.RoleAssistant, Content: "done"}
-	ag := &Agent{
-		Config: &config.ProfileConfig{ModelName: "test"},
-		LLM: &fakeLLM{chunks: []openai.ChatCompletionResponse{{
-			Choices: []openai.ChatCompletionChoice{{Index: 0, Delta: &message}},
-		}}},
-	}
+	ag := New("test", &config.ProfileConfig{ModelName: "test"}, fakeStream(
+		openai.ChatCompletionResponse{Choices: []openai.ChatCompletionChoice{{Index: 0, Delta: &message}}},
+	))
 
 	err := ag.RunAgentLoop(context.Background(), session.New("test"), discardSink{})
 	if err == nil || !strings.Contains(err.Error(), "save session") {

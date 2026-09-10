@@ -10,137 +10,211 @@ import (
 	"github.com/lsongdev/miya-agents/openai"
 )
 
-// ToRequest converts an OpenAI chat completion request to Anthropic messages format.
+// NewAnthropicRequestFromChatCompletionRequest converts the agent's OpenAI-shaped
+// conversation into a native Anthropic Messages request.
 func NewAnthropicRequestFromChatCompletionRequest(req *openai.ChatCompletionRequest) *Request {
-	anthropicReq := &Request{
-		Model:  req.Model,
-		Stream: req.Stream,
+	out := &Request{
+		Model:         req.Model,
+		Stream:        req.Stream,
+		TopP:          req.TopP,
+		Temperature:   req.Temperature,
+		StopSequences: req.Stop,
+		MaxTokens:     req.MaxTokens,
 	}
-	if req.MaxTokens > 0 {
-		anthropicReq.MaxTokens = req.MaxTokens
-	} else {
-		anthropicReq.MaxTokens = 4096
+	if out.MaxTokens == 0 {
+		out.MaxTokens = 4096
 	}
-	anthropicReq.TopP = req.TopP
-	anthropicReq.Temperature = req.Temperature
-	anthropicReq.StopSequences = req.Stop
+	for _, tool := range req.Tools {
+		out.Tools = append(out.Tools, Tool{
+			Name:        tool.Function.Name,
+			Description: tool.Function.Description,
+			InputSchema: tool.Function.Parameters,
+		})
+	}
 
-	var systemParts []string
+	var system []string
 	for _, msg := range req.Messages {
 		switch msg.Role {
 		case openai.RoleSystem:
-			systemParts = append(systemParts, msg.Content)
+			system = append(system, msg.Content)
 		case openai.RoleUser:
-			anthropicReq.Messages = append(anthropicReq.Messages, Message{
-				Role:    "user",
-				Content: msg.Content,
-			})
+			out.Messages = append(out.Messages, TextMessage("user", msg.Content))
 		case openai.RoleAssistant:
-			anthropicReq.Messages = append(anthropicReq.Messages, Message{
-				Role:    "assistant",
-				Content: msg.Content,
-			})
+			blocks := make([]ContentBlock, 0, 1+len(msg.ToolCalls))
+			if msg.Content != "" {
+				blocks = append(blocks, ContentBlock{Type: "text", Text: msg.Content})
+			}
+			for _, call := range msg.ToolCalls {
+				input := json.RawMessage(call.Function.Arguments)
+				if len(input) == 0 {
+					input = json.RawMessage(`{}`)
+				}
+				blocks = append(blocks, ContentBlock{
+					Type:  "tool_use",
+					ID:    call.ID,
+					Name:  call.Function.Name,
+					Input: input,
+				})
+			}
+			if len(blocks) > 0 {
+				out.Messages = append(out.Messages, Message{Role: "assistant", Blocks: blocks})
+			}
 		case openai.RoleTool:
-			toolCtx := fmt.Sprintf("Tool result (%s): %s", msg.Name, msg.Content)
-			anthropicReq.Messages = append(anthropicReq.Messages, Message{
-				Role:    "user",
-				Content: toolCtx,
-			})
+			block := ContentBlock{
+				Type:      "tool_result",
+				ToolUseID: msg.ToolCallID,
+				Content:   msg.Content,
+			}
+			last := len(out.Messages) - 1
+			if last >= 0 && toolResultsOnly(out.Messages[last]) {
+				out.Messages[last].Blocks = append(out.Messages[last].Blocks, block)
+			} else {
+				out.Messages = append(out.Messages, Message{Role: "user", Blocks: []ContentBlock{block}})
+			}
 		}
 	}
-
-	if len(systemParts) > 0 {
-		anthropicReq.System = strings.Join(systemParts, "\n\n")
-	}
-
-	return anthropicReq
+	out.System = strings.Join(system, "\n\n")
+	return out
 }
 
-// ToAnthropicResponse converts an OpenAI chat completion response to Anthropic format.
-func NewAnthropicResponseFromChatCompletionResponse(oaiResp *openai.ChatCompletionResponse) *Response {
-	anthResp := &Response{
-		ID:    oaiResp.ID,
-		Type:  "message",
-		Role:  "assistant",
-		Model: oaiResp.Model,
+func toolResultsOnly(message Message) bool {
+	if message.Role != "user" || len(message.Blocks) == 0 {
+		return false
 	}
-
-	if len(oaiResp.Choices) > 0 {
-		msg := oaiResp.Choices[0].Message
-		if msg.Content != "" {
-			anthResp.Content = append(anthResp.Content, ContentBlock{
-				Type: "text",
-				Text: msg.Content,
-			})
-		}
-		if msg.ReasoningContent != "" {
-			anthResp.Content = append(anthResp.Content, ContentBlock{
-				Type:     "thinking",
-				Thinking: msg.ReasoningContent,
-			})
-		}
-		anthResp.StopReason = MapStopReasonReverse(oaiResp.Choices[0].FinishReason)
-	}
-
-	if oaiResp.Usage != nil && (oaiResp.Usage.PromptTokens > 0 || oaiResp.Usage.CompletionTokens > 0) {
-		anthResp.Usage = Usage{
-			InputTokens:  oaiResp.Usage.PromptTokens,
-			OutputTokens: oaiResp.Usage.CompletionTokens,
+	for _, block := range message.Blocks {
+		if block.Type != "tool_result" {
+			return false
 		}
 	}
-
-	return anthResp
+	return true
 }
 
-// ToOpenAIResponse converts an Anthropic message response to OpenAI chat completion format.
-func NewChatCompletionResponseFromAnthropicResponse(anthResp *Response) *openai.ChatCompletionResponse {
-	var content, reasoning string
-	for _, block := range anthResp.Content {
+// NewAnthropicResponseFromChatCompletionResponse converts an OpenAI chat response
+// to Anthropic's response shape.
+func NewAnthropicResponseFromChatCompletionResponse(resp *openai.ChatCompletionResponse) *Response {
+	out := &Response{ID: resp.ID, Type: "message", Role: "assistant", Model: resp.Model}
+	if choice := resp.GetFirstChoice(); choice != nil {
+		if msg := choice.Message; msg != nil {
+			if msg.Content != "" {
+				out.Content = append(out.Content, ContentBlock{Type: "text", Text: msg.Content})
+			}
+			if msg.ReasoningContent != "" {
+				out.Content = append(out.Content, ContentBlock{Type: "thinking", Thinking: msg.ReasoningContent})
+			}
+			for _, call := range msg.ToolCalls {
+				input := json.RawMessage(call.Function.Arguments)
+				if len(input) == 0 {
+					input = json.RawMessage(`{}`)
+				}
+				out.Content = append(out.Content, ContentBlock{
+					Type: "tool_use", ID: call.ID, Name: call.Function.Name, Input: input,
+				})
+			}
+		}
+		out.StopReason = MapStopReasonReverse(choice.FinishReason)
+	}
+	if resp.Usage != nil {
+		out.Usage = Usage{InputTokens: resp.Usage.PromptTokens, OutputTokens: resp.Usage.CompletionTokens}
+	}
+	return out
+}
+
+// NewChatCompletionResponseFromAnthropicResponse converts an Anthropic response
+// into the shape consumed by the agent loop.
+func NewChatCompletionResponseFromAnthropicResponse(resp *Response) *openai.ChatCompletionResponse {
+	message := openai.ChatCompletionMessage{Role: openai.RoleAssistant}
+	for _, block := range resp.Content {
 		switch block.Type {
 		case "text":
-			content += block.Text
+			message.Content += block.Text
 		case "thinking":
-			reasoning += block.Thinking
+			message.ReasoningContent += block.Thinking
+		case "tool_use":
+			args := string(block.Input)
+			if args == "" {
+				args = `{}`
+			}
+			message.ToolCalls = append(message.ToolCalls, openai.ToolCall{
+				Index: len(message.ToolCalls),
+				ID:    block.ID,
+				Type:  "function",
+				Function: openai.FunctionCall{
+					Name: block.Name, Arguments: args,
+				},
+			})
 		}
 	}
-	oaiResp := openai.NewChatCompletionResponse(anthResp.ID, anthResp.Model, content, reasoning)
-	oaiResp.Choices[0].FinishReason = MapStopReason(anthResp.StopReason)
-	oaiResp.Usage = &openai.CompletionUsage{
-		PromptTokens:     anthResp.Usage.InputTokens,
-		CompletionTokens: anthResp.Usage.OutputTokens,
-		TotalTokens:      anthResp.Usage.InputTokens + anthResp.Usage.OutputTokens,
+	out := openai.NewChatCompletionResponse(resp.ID, resp.Model, message.Content, message.ReasoningContent)
+	out.Choices[0].Message = &message
+	out.Choices[0].FinishReason = MapStopReason(resp.StopReason)
+	out.Usage = &openai.CompletionUsage{
+		PromptTokens:     resp.Usage.InputTokens,
+		CompletionTokens: resp.Usage.OutputTokens,
+		TotalTokens:      resp.Usage.InputTokens + resp.Usage.OutputTokens,
 	}
-	return oaiResp
+	return out
 }
 
-// ToOpenAIRequest converts an Anthropic messages request to OpenAI chat completion format.
+// NewChatCompletionRequestFromAnthropicRequest converts an Anthropic request to
+// OpenAI chat-completion format.
 func NewChatCompletionRequestFromAnthropicRequest(req *Request) *openai.ChatCompletionRequest {
-	oaiReq := &openai.ChatCompletionRequest{
-		Model:     req.Model,
-		MaxTokens: req.MaxTokens,
-		Stream:    req.Stream,
+	out := &openai.ChatCompletionRequest{
+		Model:       req.Model,
+		MaxTokens:   req.MaxTokens,
+		Stream:      req.Stream,
+		TopP:        req.TopP,
+		Stop:        req.StopSequences,
+		Temperature: req.Temperature,
 	}
-
-	oaiReq.TopP = req.TopP
-	oaiReq.Stop = req.StopSequences
-	oaiReq.MaxTokens = req.MaxTokens
-	oaiReq.Temperature = req.Temperature
-
 	if req.System != "" {
-		oaiReq.Messages = append(oaiReq.Messages, openai.ChatCompletionMessage{
-			Role:    openai.RoleSystem,
-			Content: req.System,
+		out.Messages = append(out.Messages, openai.SystemMessage(req.System))
+	}
+	for _, tool := range req.Tools {
+		out.Tools = append(out.Tools, openai.ToolDef{
+			Type: "function",
+			Function: openai.FunctionDef{
+				Name: tool.Name, Description: tool.Description, Parameters: tool.InputSchema,
+			},
 		})
 	}
-
 	for _, msg := range req.Messages {
-		oaiReq.Messages = append(oaiReq.Messages, openai.ChatCompletionMessage{
-			Role:    msg.Role,
-			Content: msg.Content,
-		})
+		switch msg.Role {
+		case "assistant":
+			converted := openai.ChatCompletionMessage{Role: openai.RoleAssistant}
+			for _, block := range msg.contentBlocks() {
+				switch block.Type {
+				case "text":
+					converted.Content += block.Text
+				case "thinking":
+					converted.ReasoningContent += block.Thinking
+				case "tool_use":
+					args := string(block.Input)
+					if args == "" {
+						args = `{}`
+					}
+					converted.ToolCalls = append(converted.ToolCalls, openai.ToolCall{
+						Index: len(converted.ToolCalls), ID: block.ID, Type: "function",
+						Function: openai.FunctionCall{Name: block.Name, Arguments: args},
+					})
+				}
+			}
+			out.Messages = append(out.Messages, converted)
+		case "user":
+			var text strings.Builder
+			for _, block := range msg.contentBlocks() {
+				switch block.Type {
+				case "text":
+					text.WriteString(block.Text)
+				case "tool_result":
+					out.Messages = append(out.Messages, openai.ToolResultMessage(block.ToolUseID, "", block.Content))
+				}
+			}
+			if text.Len() > 0 {
+				out.Messages = append(out.Messages, openai.UserMessage(text.String()))
+			}
+		}
 	}
-
-	return oaiReq
+	return out
 }
 
 // MapStopReason maps Anthropic stop reasons to OpenAI finish reasons.
@@ -158,8 +232,7 @@ func MapStopReason(reason string) string {
 }
 
 func (c *Client) CreateChatCompletion(ctx context.Context, req *openai.ChatCompletionRequest) (*openai.ChatCompletionResponse, error) {
-	anthReq := NewAnthropicRequestFromChatCompletionRequest(req)
-	resp, err := c.CreateMessage(ctx, anthReq)
+	resp, err := c.CreateMessage(ctx, NewAnthropicRequestFromChatCompletionRequest(req))
 	if err != nil {
 		return nil, err
 	}
@@ -176,72 +249,83 @@ func (c *Client) CreateChatCompletionStream(ctx context.Context, req *openai.Cha
 	return AnthropicStreamToChatCompletionStream(stream, nil), nil
 }
 
-// AnthropicStreamToChatCompletionStream converts an Anthropic message stream to OpenAI chat completion chunks.
-// If onEvent is provided, each event is passed to it before conversion.
+// AnthropicStreamToChatCompletionStream converts Anthropic SSE events to the
+// stream shape consumed by the agent loop.
 func AnthropicStreamToChatCompletionStream(stream *MessageStream, onEvent func(Event)) <-chan openai.ChatCompletionResponse {
 	ch := make(chan openai.ChatCompletionResponse)
 	go func() {
 		defer close(ch)
 		var messageID, model string
-		var sentFirst bool
 		var inputTokens int
 		for event := range stream.Events {
 			if onEvent != nil {
 				onEvent(event)
 			}
 			switch event.Type {
+			case "error":
+				if event.Error != nil {
+					ch <- openai.ChatCompletionResponse{Error: &openai.Error{Type: event.Error.Type, Message: event.Error.Message}}
+				}
+				return
 			case "message_start":
 				if event.Message != nil {
 					messageID = event.Message.ID
 					model = event.Message.Model
 					inputTokens = event.Message.Usage.InputTokens
 				}
+			case "content_block_start":
+				if event.ContentBlock == nil || event.ContentBlock.Type != "tool_use" {
+					continue
+				}
+				index := 0
+				if event.Index != nil {
+					index = *event.Index
+				}
+				ch <- chatDelta(messageID, model, openai.ChatCompletionMessage{
+					ToolCalls: []openai.ToolCall{{
+						Index: index, ID: event.ContentBlock.ID, Type: "function",
+						Function: openai.FunctionCall{Name: event.ContentBlock.Name},
+					}},
+				})
 			case "content_block_delta":
 				var delta Delta
 				if err := json.Unmarshal(event.Delta, &delta); err != nil {
 					continue
 				}
-				msg := &openai.ChatCompletionMessage{}
+				message := openai.ChatCompletionMessage{}
 				switch delta.Type {
 				case "text_delta":
-					msg.Content = delta.Text
+					message.Content = delta.Text
 				case "thinking_delta":
-					msg.ReasoningContent = delta.Thinking
+					message.ReasoningContent = delta.Thinking
+				case "input_json_delta":
+					index := 0
+					if event.Index != nil {
+						index = *event.Index
+					}
+					message.ToolCalls = []openai.ToolCall{{
+						Index: index,
+						Function: openai.FunctionCall{Arguments: delta.PartialJSON},
+					}}
 				}
-				if msg.Content == "" && msg.ReasoningContent == "" {
-					continue
-				}
-				if !sentFirst {
-					msg.Role = openai.RoleAssistant
-					sentFirst = true
-				}
-				ch <- openai.ChatCompletionResponse{
-					ID:      messageID,
-					Model:   model,
-					Object:  "chat.completion.chunk",
-					Choices: []openai.ChatCompletionChoice{{Index: 0, Delta: msg}},
+				if !message.IsEmpty() {
+					ch <- chatDelta(messageID, model, message)
 				}
 			case "message_delta":
 				var delta Delta
-				if err := json.Unmarshal(event.Delta, &delta); err == nil && delta.StopReason != "" {
-					outputTokens := 0
-					if event.Usage != nil {
-						outputTokens = event.Usage.OutputTokens
-					}
-					ch <- openai.ChatCompletionResponse{
-						ID:     messageID,
-						Model:  model,
-						Object: "chat.completion.chunk",
-						Choices: []openai.ChatCompletionChoice{{
-							Index:        0,
-							FinishReason: MapStopReason(delta.StopReason),
-						}},
-						Usage: &openai.CompletionUsage{
-							PromptTokens:     inputTokens,
-							CompletionTokens: outputTokens,
-							TotalTokens:      inputTokens + outputTokens,
-						},
-					}
+				if err := json.Unmarshal(event.Delta, &delta); err != nil || delta.StopReason == "" {
+					continue
+				}
+				outputTokens := 0
+				if event.Usage != nil {
+					outputTokens = event.Usage.OutputTokens
+				}
+				ch <- openai.ChatCompletionResponse{
+					ID: messageID, Model: model, Object: "chat.completion.chunk",
+					Choices: []openai.ChatCompletionChoice{{Index: 0, FinishReason: MapStopReason(delta.StopReason)}},
+					Usage: &openai.CompletionUsage{
+						PromptTokens: inputTokens, CompletionTokens: outputTokens, TotalTokens: inputTokens + outputTokens,
+					},
 				}
 			case "message_stop":
 				return
@@ -249,6 +333,13 @@ func AnthropicStreamToChatCompletionStream(stream *MessageStream, onEvent func(E
 		}
 	}()
 	return ch
+}
+
+func chatDelta(id, model string, message openai.ChatCompletionMessage) openai.ChatCompletionResponse {
+	return openai.ChatCompletionResponse{
+		ID: id, Model: model, Object: "chat.completion.chunk",
+		Choices: []openai.ChatCompletionChoice{{Index: 0, Delta: &message}},
+	}
 }
 
 // OpenAIStreamToAnthropicStream converts an OpenAI chat completion stream to Anthropic SSE events.
@@ -330,9 +421,7 @@ func OpenAIStreamToAnthropicStream(chunks <-chan openai.ChatCompletionResponse, 
 			if !hasContent {
 				sendContentBlockStart()
 			}
-			anthStream.SendContentBlockDelta(0, Delta{
-				Type: "text_delta", Text: delta.Content,
-			})
+			anthStream.SendContentBlockDelta(0, Delta{Type: "text_delta", Text: delta.Content})
 		}
 
 		if choice.FinishReason != "" {
