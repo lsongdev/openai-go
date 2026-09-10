@@ -71,7 +71,12 @@ func (c *Client) applyHeaders(req *http.Request) error {
 // body. Endpoint may be absolute or relative to the configured API URL.
 func (c *Client) NewRequest(ctx context.Context, method, endpoint string, body io.Reader) (*http.Request, error) {
 	if !strings.HasPrefix(endpoint, "http://") && !strings.HasPrefix(endpoint, "https://") {
-		endpoint = strings.TrimRight(c.config.API, "/") + "/" + strings.TrimLeft(endpoint, "/")
+		base := strings.TrimRight(c.config.API, "/")
+		endpoint = strings.TrimLeft(endpoint, "/")
+		if strings.HasSuffix(base, "/v1") {
+			endpoint = strings.TrimPrefix(endpoint, "v1/")
+		}
+		endpoint = base + "/" + endpoint
 	}
 	request, err := http.NewRequestWithContext(ctx, method, endpoint, body)
 	if err != nil {
@@ -93,7 +98,7 @@ func (c *Client) Do(request *http.Request) (*http.Response, error) {
 	return c.client.Do(request)
 }
 
-func (c *Client) makeRequest(ctx context.Context, method, path string, body interface{}) (*http.Response, error) {
+func (c *Client) makeRequest(ctx context.Context, method, path string, body any) (*http.Response, error) {
 	var bodyReader io.Reader
 	if body != nil {
 		data, err := json.Marshal(body)
@@ -123,7 +128,7 @@ func (c *Client) makeRequest(ctx context.Context, method, path string, body inte
 }
 
 func (c *Client) Models(ctx context.Context) ([]Model, error) {
-	resp, err := c.makeRequest(ctx, "GET", "/v1/models", nil)
+	resp, err := c.makeRequest(ctx, http.MethodGet, "/v1/models", nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch models: %w", err)
 	}
@@ -140,7 +145,7 @@ func (c *Client) Models(ctx context.Context) ([]Model, error) {
 
 // CreateMessage sends a non-streaming message request.
 func (c *Client) CreateMessage(ctx context.Context, req *Request) (*Response, error) {
-	resp, err := c.makeRequest(ctx, "POST", "/v1/messages", req)
+	resp, err := c.makeRequest(ctx, http.MethodPost, "/v1/messages", req)
 	if err != nil {
 		return nil, err
 	}
@@ -158,17 +163,16 @@ func (c *Client) CreateMessage(ctx context.Context, req *Request) (*Response, er
 	return &result, nil
 }
 
-// MessageStream represents a streaming response channel.
+// MessageStream ends when Events closes.
 type MessageStream struct {
 	Events chan Event
-	Done   chan struct{}
 }
 
-// CreateMessageStream sends a streaming message request and returns a channel of SSE events.
+// CreateMessageStream sends a streaming message request and returns Anthropic SSE events.
 func (c *Client) CreateMessageStream(ctx context.Context, req *Request) (*MessageStream, error) {
-	req.Stream = true
-
-	data, err := json.Marshal(req)
+	streamReq := *req
+	streamReq.Stream = true
+	data, err := json.Marshal(&streamReq)
 	if err != nil {
 		return nil, fmt.Errorf("json marshal error: %w", err)
 	}
@@ -183,14 +187,18 @@ func (c *Client) CreateMessageStream(ctx context.Context, req *Request) (*Messag
 		return nil, err
 	}
 
-	out := &MessageStream{
-		Events: make(chan Event),
-		Done:   make(chan struct{}),
-	}
-
+	out := &MessageStream{Events: make(chan Event)}
 	go func() {
 		defer close(out.Events)
-		defer close(out.Done)
+		emitError := func(err error) {
+			if err == nil || ctx.Err() != nil {
+				return
+			}
+			select {
+			case out.Events <- Event{Type: "error", Error: &APIError{Type: "stream_error", Message: err.Error()}}:
+			case <-ctx.Done():
+			}
+		}
 
 		for {
 			select {
@@ -198,15 +206,33 @@ func (c *Client) CreateMessageStream(ctx context.Context, req *Request) (*Messag
 				return
 			case evt, ok := <-stream.Events:
 				if !ok {
+					if err, ok := <-stream.Err(); ok && err != nil {
+						emitError(err)
+					} else {
+						emitError(io.ErrUnexpectedEOF)
+					}
 					return
 				}
 				var event Event
 				if err := json.Unmarshal([]byte(evt.Data), &event); err != nil {
-					continue
+					emitError(fmt.Errorf("decode stream event: %w", err))
+					return
 				}
 				event.Type = evt.Type
-				out.Events <- event
-			case <-stream.Err():
+				select {
+				case out.Events <- event:
+				case <-ctx.Done():
+					return
+				}
+				if event.Type == "message_stop" {
+					return
+				}
+			case err, ok := <-stream.Err():
+				if ok && err != nil {
+					emitError(err)
+				} else {
+					emitError(io.ErrUnexpectedEOF)
+				}
 				return
 			}
 		}

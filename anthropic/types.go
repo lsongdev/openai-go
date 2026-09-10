@@ -12,6 +12,7 @@ type Request struct {
 	MaxTokens     int       `json:"max_tokens"`
 	Messages      []Message `json:"messages"`
 	System        string    `json:"system,omitempty"`
+	Tools         []Tool    `json:"tools,omitempty"`
 	Stream        bool      `json:"stream,omitempty"`
 	Temperature   *float64  `json:"temperature,omitempty"`
 	TopP          *float64  `json:"top_p,omitempty"`
@@ -52,43 +53,63 @@ func (r *Request) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// Message is a single message in an Anthropic request.
+// Tool describes a client tool available to Claude.
+type Tool struct {
+	Name        string         `json:"name"`
+	Description string         `json:"description,omitempty"`
+	InputSchema map[string]any `json:"input_schema"`
+}
+
+// Message keeps the common text form terse while exposing Blocks for tool use
+// and other structured Anthropic content. Set either Content or Blocks.
 type Message struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role    string         `json:"role"`
+	Content string         `json:"-"`
+	Blocks  []ContentBlock `json:"-"`
+}
+
+func TextMessage(role, text string) Message {
+	return Message{Role: role, Content: text}
+}
+
+func (m Message) MarshalJSON() ([]byte, error) {
+	var content any = m.Content
+	if m.Blocks != nil {
+		content = m.Blocks
+	}
+	return json.Marshal(struct {
+		Role    string `json:"role"`
+		Content any    `json:"content"`
+	}{m.Role, content})
 }
 
 func (m *Message) UnmarshalJSON(data []byte) error {
-	type Alias Message
-	aux := &struct {
+	var wire struct {
+		Role    string          `json:"role"`
 		Content json.RawMessage `json:"content"`
-		*Alias
-	}{Alias: (*Alias)(m)}
-	if err := json.Unmarshal(data, aux); err != nil {
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
 		return err
 	}
-	if len(aux.Content) == 0 {
+	m.Role = wire.Role
+	if err := json.Unmarshal(wire.Content, &m.Content); err == nil {
+		m.Blocks = nil
 		return nil
 	}
-	var s string
-	if err := json.Unmarshal(aux.Content, &s); err == nil {
-		m.Content = s
-		return nil
-	}
-	var blocks []struct {
-		Type string `json:"type"`
-		Text string `json:"text,omitempty"`
-	}
-	if err := json.Unmarshal(aux.Content, &blocks); err != nil {
+	m.Content = ""
+	if err := json.Unmarshal(wire.Content, &m.Blocks); err != nil {
 		return fmt.Errorf("content must be a string or array of content blocks: %v", err)
 	}
-	var texts []string
-	for _, b := range blocks {
-		if b.Type == "text" {
-			texts = append(texts, b.Text)
-		}
+	return nil
+}
+
+func (m Message) contentBlocks() []ContentBlock {
+	if m.Blocks != nil {
+		return m.Blocks
 	}
-	m.Content = strings.Join(texts, "\n")
+	if m.Content != "" {
+		return []ContentBlock{{Type: "text", Text: m.Content}}
+	}
 	return nil
 }
 
@@ -104,11 +125,17 @@ type Response struct {
 	StopSequence string         `json:"stop_sequence,omitempty"`
 }
 
-// ContentBlock is a block of content in an Anthropic response.
+// ContentBlock is a block in an Anthropic message or response.
 type ContentBlock struct {
-	Type     string `json:"type"` // "text", "thinking", "redacted_thinking", "tool_use"
-	Text     string `json:"text"`
-	Thinking string `json:"thinking,omitempty"`
+	Type      string          `json:"type"` // text, thinking, redacted_thinking, tool_use, tool_result
+	Text      string          `json:"text,omitempty"`
+	Thinking  string          `json:"thinking,omitempty"`
+	ID        string          `json:"id,omitempty"`
+	Name      string          `json:"name,omitempty"`
+	Input     json.RawMessage `json:"input,omitempty"`
+	ToolUseID string          `json:"tool_use_id,omitempty"`
+	Content   string          `json:"content,omitempty"`
+	IsError   bool            `json:"is_error,omitempty"`
 }
 
 // Usage contains token usage from Anthropic.
@@ -143,10 +170,11 @@ type MessageStart struct {
 	Usage Usage  `json:"usage"`
 }
 
-// Delta represents the incremental payload inside a content_block_delta event.
+// Delta represents the incremental payload inside streamed Anthropic events.
 type Delta struct {
-	Type       string `json:"type"` // "text_delta", "thinking_delta", "signature_delta"
-	Text       string `json:"text,omitempty"`
-	Thinking   string `json:"thinking,omitempty"`
-	StopReason string `json:"stop_reason,omitempty"`
+	Type        string `json:"type"` // text_delta, thinking_delta, input_json_delta, signature_delta
+	Text        string `json:"text,omitempty"`
+	Thinking    string `json:"thinking,omitempty"`
+	PartialJSON string `json:"partial_json,omitempty"`
+	StopReason  string `json:"stop_reason,omitempty"`
 }

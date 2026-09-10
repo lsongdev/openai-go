@@ -141,7 +141,7 @@ func TestCreateMessage(t *testing.T) {
 	resp, err := c.CreateMessage(context.Background(), &Request{
 		Model:     "claude-3",
 		MaxTokens: 100,
-		Messages:  []Message{{Role: "user", Content: "hi"}},
+		Messages:  []Message{TextMessage("user", "hi")},
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -171,7 +171,7 @@ func TestCreateMessage_Error(t *testing.T) {
 	_, err := c.CreateMessage(context.Background(), &Request{
 		Model:     "claude-3",
 		MaxTokens: 100,
-		Messages:  []Message{{Role: "user", Content: "hi"}},
+		Messages:  []Message{TextMessage("user", "hi")},
 	})
 	if err == nil {
 		t.Fatal("expected error, got nil")
@@ -186,7 +186,7 @@ func TestCreateMessage_ConnectionError(t *testing.T) {
 	_, err := c.CreateMessage(context.Background(), &Request{
 		Model:     "claude-3",
 		MaxTokens: 100,
-		Messages:  []Message{{Role: "user", Content: "hi"}},
+		Messages:  []Message{TextMessage("user", "hi")},
 	})
 	if err == nil {
 		t.Fatal("expected error, got nil")
@@ -214,7 +214,7 @@ func TestCreateMessage_MultipleContentBlocks(t *testing.T) {
 	resp, err := c.CreateMessage(context.Background(), &Request{
 		Model:     "claude-3",
 		MaxTokens: 100,
-		Messages:  []Message{{Role: "user", Content: "explain quantum physics"}},
+		Messages:  []Message{TextMessage("user", "explain quantum physics")},
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -274,13 +274,17 @@ func TestCreateMessageStream(t *testing.T) {
 	defer server.Close()
 
 	c := NewClient(&Configuration{API: server.URL, APIKey: "test-key"})
-	ms, err := c.CreateMessageStream(context.Background(), &Request{
+	req := &Request{
 		Model:     "claude-3",
 		MaxTokens: 100,
-		Messages:  []Message{{Role: "user", Content: "hi"}},
-	})
+		Messages:  []Message{TextMessage("user", "hi")},
+	}
+	ms, err := c.CreateMessageStream(context.Background(), req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if req.Stream {
+		t.Fatal("CreateMessageStream mutated request")
 	}
 
 	var texts []string
@@ -307,7 +311,7 @@ func TestCreateMessageStream(t *testing.T) {
 
 	expectedTypes := []string{"message_start", "content_block_delta", "content_block_delta", "message_delta", "message_stop"}
 	if len(eventTypes) != len(expectedTypes) {
-		t.Fatalf("expected %d events, got %d", len(expectedTypes), len(eventTypes))
+		t.Fatalf("expected %d events, got %d: %v", len(expectedTypes), len(eventTypes), eventTypes)
 	}
 	for i, et := range expectedTypes {
 		if eventTypes[i] != et {
@@ -329,7 +333,7 @@ func TestCreateMessageStream_ContextCancel(t *testing.T) {
 	ms, err := c.CreateMessageStream(ctx, &Request{
 		Model:     "claude-3",
 		MaxTokens: 100,
-		Messages:  []Message{{Role: "user", Content: "hi"}},
+		Messages:  []Message{TextMessage("user", "hi")},
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -347,7 +351,7 @@ func TestCreateMessageStream_ConnectionError(t *testing.T) {
 	_, err := c.CreateMessageStream(context.Background(), &Request{
 		Model:     "claude-3",
 		MaxTokens: 100,
-		Messages:  []Message{{Role: "user", Content: "hi"}},
+		Messages:  []Message{TextMessage("user", "hi")},
 	})
 	if err == nil {
 		t.Fatal("expected error, got nil")
@@ -366,18 +370,18 @@ func TestCreateMessageStream_JSONError(t *testing.T) {
 	ms, err := c.CreateMessageStream(context.Background(), &Request{
 		Model:     "claude-3",
 		MaxTokens: 100,
-		Messages:  []Message{{Role: "user", Content: "hi"}},
+		Messages:  []Message{TextMessage("user", "hi")},
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	var count int
-	for range ms.Events {
-		count++
+	event, ok := <-ms.Events
+	if !ok || event.Type != "error" || event.Error == nil {
+		t.Fatalf("event = %#v", event)
 	}
-	if count != 1 {
-		t.Fatalf("expected 1 event (message_stop), got %d", count)
+	if _, ok := <-ms.Events; ok {
+		t.Fatal("stream continued after decode error")
 	}
 }
 

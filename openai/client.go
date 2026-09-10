@@ -13,12 +13,6 @@ import (
 	"github.com/lsongdev/miya-agents/sse"
 )
 
-type ChatClient interface {
-	CreateChatCompletion(ctx context.Context, request *ChatCompletionRequest) (*ChatCompletionResponse, error)
-	CreateChatCompletionStream(ctx context.Context, request *ChatCompletionRequest) (<-chan ChatCompletionResponse, error)
-	CreateEmbeddings(ctx context.Context, request *EmbeddingRequest) (*EmbeddingResponse, error)
-}
-
 type Client struct {
 	config  *Configuration
 	client  *http.Client
@@ -100,14 +94,14 @@ func (client *Client) MakeRequest(ctx context.Context, path string, data any) (i
 	return res.Body, nil
 }
 
-// Model represents a model in the  API format
+// Model represents a model in the API format.
 type Model struct {
 	ID      string `json:"id"`
 	Object  string `json:"object"`
 	OwnedBy string `json:"owned_by"`
 }
 
-// Models fetches the list of available models from the API
+// Models fetches the list of available models from the API.
 func (client *Client) Models() (models []Model, err error) {
 	body, err := client.MakeRequest(context.Background(), "/models", nil)
 	if err != nil {
@@ -125,10 +119,10 @@ func (client *Client) Models() (models []Model, err error) {
 }
 
 func (resp *ChatCompletionResponse) GetFirstChoice() *ChatCompletionChoice {
-	for _, choice := range resp.Choices {
-		return &choice
+	if len(resp.Choices) == 0 {
+		return nil
 	}
-	return nil
+	return &resp.Choices[0]
 }
 
 func (resp *ChatCompletionResponse) GetMessage() *ChatCompletionMessage {
@@ -204,7 +198,7 @@ func (m *ChatCompletionMessage) UnmarshalJSON(data []byte) error {
 }
 
 func (m *ChatCompletionMessage) IsEmpty() bool {
-	return m.Role == "" && m.Content == "" && m.ReasoningContent == "" && (len(m.ToolCalls) == 0)
+	return m.Role == "" && m.Content == "" && m.ReasoningContent == "" && len(m.ToolCalls) == 0
 }
 
 func (m *ChatCompletionMessage) HasToolCall() bool {
@@ -242,6 +236,8 @@ func (c *Client) CreateEmbeddings(ctx context.Context, request *EmbeddingRequest
 	if err != nil {
 		return nil, err
 	}
+	defer body.Close()
+
 	data, err := io.ReadAll(body)
 	if err != nil {
 		return nil, err
@@ -263,6 +259,8 @@ func (c *Client) CreateChatCompletion(ctx context.Context, request *ChatCompleti
 	if err != nil {
 		return nil, err
 	}
+	defer body.Close()
+
 	data, err := io.ReadAll(body)
 	if err != nil {
 		return nil, err
@@ -278,23 +276,13 @@ func (c *Client) CreateChatCompletion(ctx context.Context, request *ChatCompleti
 	return &resp, err
 }
 
-// ChatCompletionStream represents a streaming response channel
-type ChatCompletionStream struct {
-	Error    chan error
-	Response chan ChatCompletionResponse
-}
-
-// Close closes the stream channels
-func (stream *ChatCompletionStream) Close() {
-	close(stream.Error)
-	close(stream.Response)
-}
-
-// CreateChatCompletionStream creates a streaming chat completion
+// CreateChatCompletionStream sends a streaming chat completion request.
 func (c *Client) CreateChatCompletionStream(ctx context.Context, request *ChatCompletionRequest) (<-chan ChatCompletionResponse, error) {
 	resp := make(chan ChatCompletionResponse)
+	streamRequest := *request
+	streamRequest.Stream = true
 
-	payload, err := json.Marshal(request)
+	payload, err := json.Marshal(&streamRequest)
 	if err != nil {
 		return nil, fmt.Errorf("json error: %v", err)
 	}

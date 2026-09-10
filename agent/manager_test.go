@@ -11,6 +11,7 @@ import (
 	"github.com/lsongdev/miya-agents/acp"
 	"github.com/lsongdev/miya-agents/config"
 	"github.com/lsongdev/miya-agents/mcp"
+	"github.com/lsongdev/miya-agents/openai"
 	"github.com/lsongdev/miya-agents/session"
 )
 
@@ -164,8 +165,61 @@ func TestUseAgentIncludesConfiguredMCPTools(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UseAgent: %v", err)
 	}
-	if _, ok := ag.toolsMap["mcp_coffee_queryShopList"]; !ok {
-		t.Fatalf("missing MCP tool; tools = %#v", ag.toolsMap)
+	if _, ok := ag.tool("mcp_coffee_queryShopList"); !ok {
+		t.Fatalf("missing MCP tool; tools = %#v", ag.tools)
+	}
+}
+
+func TestUseAgentUsesAnthropicProvider(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/messages" {
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+		if got := r.Header.Get("x-api-key"); got != "test-key" {
+			t.Fatalf("x-api-key = %q", got)
+		}
+		var req map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatal(err)
+		}
+		if req["model"] != "claude-test" {
+			t.Fatalf("model = %#v", req["model"])
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-test\",\"usage\":{\"input_tokens\":1,\"output_tokens\":0}}}\n\n")
+		fmt.Fprint(w, "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hello\"}}\n\n")
+		fmt.Fprint(w, "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":1}}\n\n")
+		fmt.Fprint(w, "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+	}))
+	defer server.Close()
+
+	m := NewAgentManager(&config.Config{
+		Profiles: map[string]*config.ProfileConfig{
+			"default": {Provider: "claude", ModelName: "claude-test", Workspace: t.TempDir()},
+		},
+		Providers: map[string]*config.ProviderConfig{
+			"claude": {Type: "anthropic", APIBase: server.URL, APIKey: "test-key"},
+		},
+	})
+	ag, err := m.UseAgent("default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream, err := ag.Stream(context.Background(), &openai.ChatCompletionRequest{
+		Model: "claude-test", Messages: []openai.ChatCompletionMessage{openai.UserMessage("hi")}, Stream: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	builder := openai.NewMessageBuilder()
+	for chunk := range stream {
+		if message := chunk.GetMessage(); message != nil {
+			builder.Update(*message)
+		}
+	}
+	if got := builder.Build().Content; got != "hello" {
+		t.Fatalf("content = %q", got)
 	}
 }
 

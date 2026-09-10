@@ -13,35 +13,62 @@ import (
 	"github.com/lsongdev/miya-agents/tools"
 )
 
-type LLM interface {
-	CreateChatCompletionStream(context.Context, *openai.ChatCompletionRequest) (<-chan openai.ChatCompletionResponse, error)
-}
+// StreamFunc is the only model capability required by the agent loop.
+type StreamFunc func(context.Context, *openai.ChatCompletionRequest) (<-chan openai.ChatCompletionResponse, error)
 
 type Agent struct {
 	Name   string
 	Config *config.ProfileConfig
-	LLM    LLM
-	// tools
-	toolsMap  map[string]openai.Tool
-	toolsDefs []openai.ToolDef
+	Stream StreamFunc
+	tools  []openai.Tool
+}
+
+func New(name string, cfg *config.ProfileConfig, stream StreamFunc) *Agent {
+	return &Agent{Name: name, Config: cfg, Stream: stream}
+}
+
+// Use adds tools to the agent and returns it for chaining.
+func (a *Agent) Use(tools ...openai.Tool) *Agent {
+	a.tools = append(a.tools, tools...)
+	return a
+}
+
+func (a *Agent) tool(name string) (openai.Tool, bool) {
+	for _, tool := range a.tools {
+		if tool.Def().Function.Name == name {
+			return tool, true
+		}
+	}
+	return nil, false
+}
+
+func (a *Agent) toolDefs() []openai.ToolDef {
+	defs := make([]openai.ToolDef, len(a.tools))
+	for i, tool := range a.tools {
+		defs[i] = tool.Def()
+	}
+	return defs
 }
 
 func (a *Agent) RunAgentLoop(ctx context.Context, sess *session.Session, sink EventSink) error {
+	if a.Stream == nil {
+		return fmt.Errorf("agent has no model stream")
+	}
 	for {
 		req := openai.ChatCompletionRequest{
 			Model:    a.Config.ModelName,
 			Messages: sess.Messages,
-			Tools:    a.toolsDefs,
+			Tools:    a.toolDefs(),
 			Stream:   true,
 		}
-		resp, err := a.LLM.CreateChatCompletionStream(ctx, &req)
+		resp, err := a.Stream(ctx, &req)
 		if err != nil {
-			return fmt.Errorf("failed to create chat completion stream: %w", err)
+			return fmt.Errorf("create model stream: %w", err)
 		}
 		builder := openai.NewMessageBuilder()
 		for chunk := range resp {
 			if chunk.Error != nil {
-				return fmt.Errorf("API error: %s", chunk.Error.Message)
+				return fmt.Errorf("model stream: %s", chunk.Error.Message)
 			}
 			m := chunk.GetMessage()
 			if m == nil {
@@ -64,10 +91,9 @@ func (a *Agent) RunAgentLoop(ctx context.Context, sess *session.Session, sink Ev
 		}
 		respMessage := builder.Build()
 		if respMessage.IsEmpty() {
-			return fmt.Errorf("chat completion stream closed without a response")
+			return fmt.Errorf("model stream closed without a response")
 		}
 		sess.AppendResponse(respMessage)
-		// finish
 		if !respMessage.HasToolCall() {
 			if err := sink.Usage(UsageEvent{}); err != nil {
 				return err
@@ -81,12 +107,12 @@ func (a *Agent) RunAgentLoop(ctx context.Context, sess *session.Session, sink Ev
 			}
 			return nil
 		}
-		// Execute tool calls
+
 		for _, tc := range respMessage.ToolCalls {
 			if tc.ID == "" {
 				return fmt.Errorf("tool call %q is missing an id", tc.Function.Name)
 			}
-			tool, ok := a.toolsMap[tc.Function.Name]
+			tool, ok := a.tool(tc.Function.Name)
 			if err := sink.ToolCallStart(ToolCallEvent{
 				ID:        tc.ID,
 				Name:      tc.Function.Name,
@@ -156,12 +182,6 @@ func emitAttachedFileResult(sink EventSink, result string) (string, bool, error)
 	return fmt.Sprintf("Attached %s (%s, %d bytes) as %s.", attachment.Name, attachment.MimeType, attachment.Size, attachment.URI), true, nil
 }
 
-func (a *Agent) AddTool(tool openai.Tool) {
-	d := tool.Def()
-	a.toolsMap[d.Function.Name] = tool
-	a.toolsDefs = append(a.toolsDefs, d)
-}
-
 func (a *Agent) NewSession() *session.Session {
 	s := session.New(a.Name)
 	prompt := a.readSystemPrompt()
@@ -196,7 +216,7 @@ func (a *Agent) BuildTools() {
 	if workspace != "" {
 		_ = os.MkdirAll(workspace, 0755)
 	}
-	var tools = []openai.Tool{
+	a.Use(
 		&tools.WebFetchTool{},
 		&tools.WebSearchTool{},
 		&tools.ReadFileTool{Workspace: workspace},
@@ -209,11 +229,6 @@ func (a *Agent) BuildTools() {
 			DefaultTimeout:      tools.ExecDefaultTimeoutSeconds,
 			RestrictToWorkspace: true,
 		},
-		&tools.SkillsTool{
-			Workspace: filepath.Join(config.ConfigPath, "skills"),
-		},
-	}
-	for _, t := range tools {
-		a.AddTool(t)
-	}
+		&tools.SkillsTool{Workspace: filepath.Join(config.ConfigPath, "skills")},
+	)
 }
